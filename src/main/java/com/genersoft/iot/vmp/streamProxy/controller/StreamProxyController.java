@@ -233,11 +233,15 @@ public class StreamProxyController {
                     if (userSetting.getUseSourceIpAsStreamIp()) {
                         streamInfo=streamInfo.clone();//深拷贝
                         String host;
-                        try {
-                            URL url=new URL(request.getRequestURL().toString());
-                            host=url.getHost();
-                        } catch (MalformedURLException e) {
-                            host=request.getLocalAddr();
+                        if(request == null) {
+                            host="127.0.0.1";
+                        }else {
+                            try {
+                                URL url=new URL(request.getRequestURL().toString());
+                                host=url.getHost();
+                            } catch (MalformedURLException e) {
+                                host=request.getLocalAddr();
+                            }
                         }
                         streamInfo.changeStreamIp(host);
                     }

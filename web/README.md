@@ -28,7 +28,7 @@ git clone https://github.com/PanJiaChen/vue-admin-template.git
 cd vue-admin-template
 
 # install dependency
-npm install
+npm install --verbose
 
 # develop
 npm run dev
@@ -43,7 +43,7 @@ This will automatically open http://localhost:9528
 npm run build:stage
 
 # build for production environment
-npm run build:prod
+npm run build:prod  --verbose
 ```
 
 ## Advanced
