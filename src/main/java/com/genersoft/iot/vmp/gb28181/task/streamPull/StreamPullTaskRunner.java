@@ -1,5 +1,6 @@
 package com.genersoft.iot.vmp.gb28181.task.streamPull;
 
+import com.genersoft.iot.vmp.conf.exception.ControllerException;
 import com.genersoft.iot.vmp.streamProxy.bean.StreamProxy;
 import com.genersoft.iot.vmp.streamProxy.controller.StreamProxyController;
 import com.github.pagehelper.PageInfo;
@@ -43,7 +44,7 @@ public class StreamPullTaskRunner {
 
     public void pullProxyStream() {
         try {
-            PageInfo<StreamProxy> list = streamProxyController.list(1, 100, null, false, null);
+            PageInfo<StreamProxy> list = streamProxyController.list(1, 200, null, false, "your_server_id");
             if (list != null && list.getList() != null && !list.getList().isEmpty()) {
                 log.info("当前有 {} 个未拉流的通道", list.getList().size());
                 CountDownLatch latch = new CountDownLatch(list.getList().size());
@@ -53,8 +54,10 @@ public class StreamPullTaskRunner {
                         try {
                             log.info("[{}], [{}] 尚未拉流, try start it.", streamProxy.getGbName(), streamProxy.getSrcUrl());
                             streamProxyController.start(null, streamProxy.getId());
+                        } catch (ControllerException e) {
+                            log.warn("启动拉流失败: [{}], [{}], [{}], [{}]", streamProxy.getGbName(), streamProxy.getSrcUrl(), e.getCode(), e.getMsg());
                         } catch (Exception e) {
-                            log.error("启动拉流失败: [{}], [{}]", streamProxy.getGbName(), streamProxy.getSrcUrl());
+                            log.error("启动拉流失败: [{}], [{}]", streamProxy.getGbName(), streamProxy.getSrcUrl(), e);
                         } finally {
                             latch.countDown();
                         }
