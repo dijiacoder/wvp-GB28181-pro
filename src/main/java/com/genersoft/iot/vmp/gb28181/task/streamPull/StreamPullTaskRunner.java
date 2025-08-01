@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -44,10 +45,25 @@ public class StreamPullTaskRunner {
         try {
             PageInfo<StreamProxy> list = streamProxyController.list(1, 100, null, false, null);
             if (list != null && list.getList() != null && !list.getList().isEmpty()) {
+                log.info("当前有 {} 个未拉流的通道", list.getList().size());
+                CountDownLatch latch = new CountDownLatch(list.getList().size());
+
                 for (StreamProxy streamProxy : list.getList()) {
-                    log.info("[{}] 尚未拉流, try start it.", streamProxy.getSrcUrl());
-                    streamProxyController.start(null, streamProxy.getId());
+                    new Thread(() -> {
+                        try {
+                            log.info("[{}], [{}] 尚未拉流, try start it.", streamProxy.getGbName(), streamProxy.getSrcUrl());
+                            streamProxyController.start(null, streamProxy.getId());
+                        } catch (Exception e) {
+                            log.error("启动拉流失败: [{}], [{}]", streamProxy.getGbName(), streamProxy.getSrcUrl());
+                        } finally {
+                            latch.countDown();
+                        }
+                    }).start();
                 }
+
+                // 等待所有任务完成
+                latch.await();
+                log.info("所有拉流任务已完成");
             }
         } catch (Exception e) {
             log.error("pullProxyStream error", e);
