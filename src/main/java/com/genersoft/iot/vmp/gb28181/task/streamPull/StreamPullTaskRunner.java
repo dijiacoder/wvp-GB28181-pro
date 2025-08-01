@@ -31,7 +31,7 @@ public class StreamPullTaskRunner {
         // 初始延迟30秒，之后每60秒执行一次
         executorService.scheduleWithFixedDelay(
                 this::pullProxyStream,
-                30, 60, TimeUnit.SECONDS
+                60, 15, TimeUnit.SECONDS
         );
     }
 
