@@ -32,7 +32,6 @@ class StreamProxyStartupTest {
         playService = mock(IStreamProxyPlayService.class);
         settings = mock(UserSetting.class);
         when(settings.getServerId()).thenReturn("wvp");
-        when(settings.getStreamProxyStartupConcurrency()).thenReturn(3);
         when(settings.getPlayTimeout()).thenReturn(1000);
         doAnswer(invocation -> {
             ErrorCallback<StreamInfo> callback = invocation.getArgument(1);
@@ -87,7 +86,8 @@ class StreamProxyStartupTest {
     @Test
     void limitsInFlightPullsUntilCallbacksComplete() throws Exception {
         java.util.List<StreamProxy> proxies = Arrays.asList(
-                proxy(1, null), proxy(2, null), proxy(3, null), proxy(4, null), proxy(5, null));
+                proxy(1, null), proxy(2, null), proxy(3, null), proxy(4, null), proxy(5, null),
+                proxy(6, null), proxy(7, null));
         when(mapper.selectAll(null, null, null)).thenReturn(proxies);
         when(settings.getPlayTimeout()).thenReturn(10000);
         BlockingQueue<ErrorCallback<StreamInfo>> callbacks = new LinkedBlockingQueue<>();
@@ -100,23 +100,29 @@ class StreamProxyStartupTest {
             ErrorCallback<StreamInfo> first = callbacks.poll(2, TimeUnit.SECONDS);
             ErrorCallback<StreamInfo> second = callbacks.poll(2, TimeUnit.SECONDS);
             ErrorCallback<StreamInfo> third = callbacks.poll(2, TimeUnit.SECONDS);
+            ErrorCallback<StreamInfo> fourth = callbacks.poll(2, TimeUnit.SECONDS);
+            ErrorCallback<StreamInfo> fifth = callbacks.poll(2, TimeUnit.SECONDS);
             assertNotNull(first);
             assertNotNull(second);
             assertNotNull(third);
-            assertNull(callbacks.poll(100, TimeUnit.MILLISECONDS), "回调前不应启动第4路");
-            first.run(0, "ok", null);
-            ErrorCallback<StreamInfo> fourth = callbacks.poll(2, TimeUnit.SECONDS);
             assertNotNull(fourth);
+            assertNotNull(fifth);
+            assertNull(callbacks.poll(100, TimeUnit.MILLISECONDS), "并发上限为5，回调前不应启动第6路");
+            first.run(0, "ok", null);
+            ErrorCallback<StreamInfo> sixth = callbacks.poll(2, TimeUnit.SECONDS);
+            assertNotNull(sixth);
             first.run(0, "duplicate", null);
             assertNull(callbacks.poll(100, TimeUnit.MILLISECONDS), "重复回调不应释放额外名额");
             second.run(-1, "failed", null);
-            ErrorCallback<StreamInfo> fifth = callbacks.poll(2, TimeUnit.SECONDS);
-            assertNotNull(fifth);
+            ErrorCallback<StreamInfo> seventh = callbacks.poll(2, TimeUnit.SECONDS);
+            assertNotNull(seventh);
             third.run(0, "ok", null);
             fourth.run(0, "ok", null);
             fifth.run(0, "ok", null);
+            sixth.run(0, "ok", null);
+            seventh.run(0, "ok", null);
             batch.get(2, TimeUnit.SECONDS);
-            verify(playService, times(5)).startProxy(any(), any());
+            verify(playService, times(7)).startProxy(any(), any());
         } finally {
             startup.stop();
             batch.get(3, TimeUnit.SECONDS);
@@ -125,13 +131,14 @@ class StreamProxyStartupTest {
 
     @Test
     void missingCallbackTimesOutAndAllowsNextProxy() {
-        when(settings.getStreamProxyStartupConcurrency()).thenReturn(1);
         when(settings.getPlayTimeout()).thenReturn(20);
-        java.util.List<StreamProxy> proxies = Arrays.asList(proxy(1, null), proxy(2, null));
+        // 超过固定并发数5，确认等待超时后排队的第6路仍能启动。
+        java.util.List<StreamProxy> proxies = Arrays.asList(
+                proxy(1, null), proxy(2, null), proxy(3, null), proxy(4, null), proxy(5, null), proxy(6, null));
         when(mapper.selectAll(null, null, null)).thenReturn(proxies);
         doNothing().when(playService).startProxy(any(), any());
         assertTimeoutPreemptively(java.time.Duration.ofSeconds(2), startup::startOnApplicationReady);
-        verify(playService, times(2)).startProxy(any(), any());
+        verify(playService, times(6)).startProxy(any(), any());
     }
 
     private StreamProxy proxy(int id, String node) {
