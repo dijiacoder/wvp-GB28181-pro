@@ -350,7 +350,8 @@ public class ZLMRESTfulUtils {
         param.put("rtp_type", rtp_type);
         param.put("timeout_sec", timeOut);
         // 拉流重试次数,默认为3
-        param.put("retry_count", 3);
+        param.put("retry_count", -1);
+        param.put("force", 1);
         return sendPost(mediaServerItem, "addStreamProxy",param, null, 20);
     }
 

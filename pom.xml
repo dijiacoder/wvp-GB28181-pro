@@ -369,7 +369,7 @@
     </dependencies>
 
     <build>
-        <finalName>${project.artifactId}-${project.version}-${maven.build.timestamp}</finalName>
+        <finalName>${project.artifactId}-${project.version}-${git.commit.id.abbrev}</finalName>
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
@@ -402,10 +402,20 @@
                 <groupId>pl.project13.maven</groupId>
                 <artifactId>git-commit-id-plugin</artifactId>
                 <version>3.0.1</version>
+                <executions>
+                    <execution>
+                        <id>default</id>
+                        <phase>initialize</phase>
+                        <goals>
+                            <goal>revision</goal>
+                        </goals>
+                    </execution>
+                </executions>
                 <configuration>
                     <offline>true</offline>
                     <failOnNoGitDirectory>false</failOnNoGitDirectory>
                     <dateFormat>yyyyMMdd</dateFormat>
+                    <abbrevLength>7</abbrevLength>
                 </configuration>
             </plugin>
 
