@@ -42,7 +42,8 @@ public class StreamProxyStartup {
         }
         List<StreamProxy> proxies = mapper.selectAll(null, null, null);
         log.info("[启动自动拉流] 开始扫描代理，共 {} 条", proxies.size());
-        for (StreamProxy candidate : proxies) {
+        for (int i = 0; i < proxies.size(); i++) {
+            StreamProxy candidate = proxies.get(i);
             if (!shouldStart(candidate)) {
                 continue;
             }
@@ -53,7 +54,7 @@ public class StreamProxyStartup {
                 if (proxy == null || !shouldStart(proxy)) {
                     continue;
                 }
-                log.info("[启动自动拉流] 开始，id：{}，app：{}，stream：{}", id, proxy.getApp(), proxy.getStream());
+                log.info("[启动自动拉流] 开始，No: {}/{}，id：{}，app：{}，stream：{}", i, proxies.size(), id, proxy.getApp(), proxy.getStream());
                 playService.startProxy(proxy, (code, msg, data) -> {
                     if (code == ErrorCode.SUCCESS.getCode()) {
                         log.info("[启动自动拉流] 成功，id：{}", id);
@@ -62,7 +63,7 @@ public class StreamProxyStartup {
                     }
                 });
             } catch (Exception ex) {
-                log.warn("[启动自动拉流] 异常，id：{}，原因：{}", id, ex.getMessage());
+                log.warn("[启动自动拉流] 异常，No: {}/{}，id：{}，原因：{}", i, proxies.size(), id, ex.getMessage());
             }
         }
         log.info("[启动自动拉流] 完成扫描代理，共 {} 条", proxies.size());
