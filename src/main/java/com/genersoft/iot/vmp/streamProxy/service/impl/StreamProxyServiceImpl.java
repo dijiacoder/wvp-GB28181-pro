@@ -408,13 +408,10 @@ public class StreamProxyServiceImpl implements IStreamProxyService {
         streamProxy.setUpdateTime(DateUtil.getNow());
         streamProxyMapper.updateStream(streamProxy);
 
-        streamProxy.setGbStatus(status ? "ON" : "OFF");
+        // 国标通道始终上报在线，实际拉流状态由 pulling 独立记录。
+        streamProxy.setGbStatus("ON");
         if (streamProxy.getGbId() > 0) {
-            if (status) {
-                gbChannelService.online(streamProxy.buildCommonGBChannel());
-            } else {
-                gbChannelService.offline(streamProxy.buildCommonGBChannel());
-            }
+            gbChannelService.online(streamProxy.buildCommonGBChannel());
         }
     }
 
