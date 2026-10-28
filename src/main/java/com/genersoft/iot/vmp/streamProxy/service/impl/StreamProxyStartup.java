@@ -53,7 +53,7 @@ public class StreamProxyStartup {
         if (proxies.isEmpty() || stopping) {
             return;
         }
-        int concurrency = 5;
+        int concurrency = Math.max(1, userSetting.getStreamProxyStartupConcurrency());
         log.info("[启动自动拉流] 并发上限：{}", concurrency);
         AtomicInteger next = new AtomicInteger();
         AtomicInteger threadNumber = new AtomicInteger();

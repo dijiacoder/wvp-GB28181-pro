@@ -38,6 +38,11 @@ public class UserSetting {
     private Integer playTimeout = 10000;
 
     /**
+     * 应用启动自动拉流的并发数，默认5，小于1时按1处理
+     */
+    private int streamProxyStartupConcurrency = 5;
+
+    /**
      * 获取设备录像数据超时时间,单位：毫秒
      */
     private Integer recordInfoTimeout = 15000;

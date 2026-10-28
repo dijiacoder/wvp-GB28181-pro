@@ -73,6 +73,8 @@ media:
 
 # [根据业务需求配置]
 user-settings:
+    # 应用启动自动拉流的并发数，默认5，小于1时按1处理
+    stream-proxy-startup-concurrency: 5
     # 推流直播是否录制
     record-push-live: true
     auto-apply-play: true

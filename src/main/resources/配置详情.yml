@@ -182,6 +182,8 @@ logging:
 
 # [根据业务需求配置]
 user-settings:
+    # 应用启动自动拉流的并发数，默认5，小于1时按1处理
+    stream-proxy-startup-concurrency: 5
     # 服务ID，不写则为000000
     server-id:
     # [可选] 自动点播， 使用固定流地址进行播放时，如果未点播则自动进行点播, 需要rtp.enable=true

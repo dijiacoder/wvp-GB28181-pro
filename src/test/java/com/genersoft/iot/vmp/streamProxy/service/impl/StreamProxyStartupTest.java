@@ -33,6 +33,7 @@ class StreamProxyStartupTest {
         settings = mock(UserSetting.class);
         when(settings.getServerId()).thenReturn("wvp");
         when(settings.getPlayTimeout()).thenReturn(1000);
+        when(settings.getStreamProxyStartupConcurrency()).thenReturn(5);
         doAnswer(invocation -> {
             ErrorCallback<StreamInfo> callback = invocation.getArgument(1);
             callback.run(0, "ok", new StreamInfo());
@@ -123,6 +124,51 @@ class StreamProxyStartupTest {
             seventh.run(0, "ok", null);
             batch.get(2, TimeUnit.SECONDS);
             verify(playService, times(7)).startProxy(any(), any());
+        } finally {
+            startup.stop();
+            batch.get(3, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void usesConfiguredConcurrency() throws Exception {
+        assertConcurrency(2, 2);
+    }
+
+    @Test
+    void nonPositiveConcurrencyFallsBackToOne() throws Exception {
+        assertConcurrency(0, 1);
+    }
+
+    private void assertConcurrency(int configured, int expected) throws Exception {
+        when(settings.getStreamProxyStartupConcurrency()).thenReturn(configured);
+        when(settings.getPlayTimeout()).thenReturn(10000);
+        when(mapper.selectAll(null, null, null)).thenReturn(Arrays.asList(
+                proxy(1, null), proxy(2, null), proxy(3, null)));
+        BlockingQueue<ErrorCallback<StreamInfo>> callbacks = new LinkedBlockingQueue<>();
+        doAnswer(invocation -> {
+            callbacks.add(invocation.getArgument(1));
+            return null;
+        }).when(playService).startProxy(any(), any());
+        CompletableFuture<Void> batch = CompletableFuture.runAsync(startup::startOnApplicationReady);
+        try {
+            java.util.List<ErrorCallback<StreamInfo>> active = new java.util.ArrayList<>();
+            for (int i = 0; i < expected; i++) {
+                ErrorCallback<StreamInfo> callback = callbacks.poll(2, TimeUnit.SECONDS);
+                assertNotNull(callback);
+                active.add(callback);
+            }
+            assertNull(callbacks.poll(100, TimeUnit.MILLISECONDS), "回调前不应超过配置的并发数");
+            for (ErrorCallback<StreamInfo> callback : active) {
+                callback.run(0, "ok", null);
+            }
+            for (int i = expected; i < 3; i++) {
+                ErrorCallback<StreamInfo> callback = callbacks.poll(2, TimeUnit.SECONDS);
+                assertNotNull(callback);
+                callback.run(0, "ok", null);
+            }
+            batch.get(2, TimeUnit.SECONDS);
+            verify(playService, times(3)).startProxy(any(), any());
         } finally {
             startup.stop();
             batch.get(3, TimeUnit.SECONDS);
