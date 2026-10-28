@@ -1,6 +1,7 @@
 package com.genersoft.iot.vmp.streamProxy.service.impl;
 
 import com.genersoft.iot.vmp.conf.UserSetting;
+import com.genersoft.iot.vmp.gb28181.service.IGbChannelService;
 import com.genersoft.iot.vmp.streamProxy.bean.StreamProxy;
 import com.genersoft.iot.vmp.streamProxy.dao.StreamProxyMapper;
 import com.genersoft.iot.vmp.streamProxy.service.IStreamProxyPlayService;
@@ -32,14 +33,16 @@ public class StreamProxyStartup {
     private final StreamProxyMapper mapper;
     private final IStreamProxyPlayService playService;
     private final UserSetting userSetting;
+    private final IGbChannelService gbChannelService;
     private final AtomicBoolean started = new AtomicBoolean();
     private volatile boolean stopping;
 
     public StreamProxyStartup(StreamProxyMapper mapper, IStreamProxyPlayService playService,
-                              UserSetting userSetting) {
+                              UserSetting userSetting, IGbChannelService gbChannelService) {
         this.mapper = mapper;
         this.playService = playService;
         this.userSetting = userSetting;
+        this.gbChannelService = gbChannelService;
     }
 
     @Async("taskExecutor")
@@ -101,6 +104,15 @@ public class StreamProxyStartup {
                 return;
             }
             log.info("[启动自动拉流] 开始，No: {}/{}，id：{}，app：{}，stream：{}", number, total, id, proxy.getApp(), proxy.getStream());
+            // 启动拉流即上报国标通道在线，不依赖拉流结果，也不修改实际 pulling 状态。
+            if (proxy.getGbId() > 0) {
+                try {
+                    proxy.setGbStatus("ON");
+                    gbChannelService.online(proxy.buildCommonGBChannel());
+                } catch (Exception ex) {
+                    log.warn("[启动自动拉流] 国标在线上报失败，id：{}，原因：{}", id, ex.getMessage());
+                }
+            }
             playService.startProxy(proxy, (code, msg, data) -> {
                 if (!result.complete(null)) {
                     return;

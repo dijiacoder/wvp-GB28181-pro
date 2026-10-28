@@ -1,6 +1,8 @@
 package com.genersoft.iot.vmp.streamProxy.service.impl;
 
 import com.genersoft.iot.vmp.conf.UserSetting;
+import com.genersoft.iot.vmp.gb28181.service.IGbChannelService;
+import com.genersoft.iot.vmp.gb28181.bean.CommonGBChannel;
 import com.genersoft.iot.vmp.common.StreamInfo;
 import com.genersoft.iot.vmp.service.bean.ErrorCallback;
 import com.genersoft.iot.vmp.streamProxy.bean.StreamProxy;
@@ -25,12 +27,14 @@ class StreamProxyStartupTest {
     private IStreamProxyPlayService playService;
     private StreamProxyStartup startup;
     private UserSetting settings;
+    private IGbChannelService gbChannelService;
 
     @BeforeEach
     void setup() {
         mapper = mock(StreamProxyMapper.class);
         playService = mock(IStreamProxyPlayService.class);
         settings = mock(UserSetting.class);
+        gbChannelService = mock(IGbChannelService.class);
         when(settings.getServerId()).thenReturn("wvp");
         when(settings.getPlayTimeout()).thenReturn(1000);
         when(settings.getStreamProxyStartupConcurrency()).thenReturn(5);
@@ -39,7 +43,36 @@ class StreamProxyStartupTest {
             callback.run(0, "ok", new StreamInfo());
             return null;
         }).when(playService).startProxy(any(), any());
-        startup = new StreamProxyStartup(mapper, playService, settings);
+        startup = new StreamProxyStartup(mapper, playService, settings, gbChannelService);
+    }
+
+    @Test
+    void reportsOnlineBeforePullEvenWhenPullFails() {
+        StreamProxy proxy = proxy(1, null);
+        proxy.setGbId(100);
+        proxy.setPulling(false);
+        when(mapper.selectAll(null, null, null)).thenReturn(Arrays.asList(proxy));
+        doThrow(new IllegalStateException("unavailable")).when(playService).startProxy(eq(proxy), any());
+
+        startup.startOnApplicationReady();
+
+        org.mockito.InOrder order = inOrder(gbChannelService, playService);
+        order.verify(gbChannelService).online(any(CommonGBChannel.class));
+        order.verify(playService).startProxy(eq(proxy), any());
+        assertEquals("ON", proxy.getGbStatus());
+        assertEquals(Boolean.FALSE, proxy.getPulling());
+    }
+
+    @Test
+    void onlineReportFailureDoesNotPreventPull() {
+        StreamProxy proxy = proxy(1, null);
+        proxy.setGbId(100);
+        when(mapper.selectAll(null, null, null)).thenReturn(Arrays.asList(proxy));
+        when(gbChannelService.online(any(CommonGBChannel.class))).thenThrow(new IllegalStateException("unavailable"));
+
+        startup.startOnApplicationReady();
+
+        verify(playService).startProxy(eq(proxy), any());
     }
 
     @Test
