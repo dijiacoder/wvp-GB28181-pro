@@ -490,7 +490,7 @@ public class ZLMMediaNodeServerService implements IMediaNodeServerService {
             } else {
                 String detail = proxies == null ? "无有效响应" : "code=" + proxies.getInteger("code")
                         + ", httpStatus=" + proxies.getInteger("httpStatus") + ", msg=" + proxies.getString("msg");
-                log.warn("[拉流代理] 查询代理失败，继续尝试添加，mediaServerId：{}，key：{}，{}",
+                log.debug("[拉流代理] 查询代理失败，继续尝试添加，mediaServerId：{}，key：{}，{}",
                         mediaServer.getId(), key, detail);
             }
             jsonObject = zlmresTfulUtils.addStreamProxy(mediaServer, streamProxy.getApp(), streamProxy.getStream(), streamProxy.getSrcUrl().trim(),
