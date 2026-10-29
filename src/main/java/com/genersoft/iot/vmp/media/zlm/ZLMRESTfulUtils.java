@@ -340,6 +340,12 @@ public class ZLMRESTfulUtils {
     }
 
     public JSONObject addStreamProxy(MediaServer mediaServerItem, String app, String stream, String url, boolean enable_audio, boolean enable_mp4, String rtp_type, Integer timeOut) {
+        return addStreamProxy(mediaServerItem, app, stream, url, enable_audio, enable_mp4, rtp_type, timeOut, false);
+    }
+
+    public JSONObject addStreamProxy(MediaServer mediaServerItem, String app, String stream, String url,
+                                     boolean enable_audio, boolean enable_mp4, String rtp_type, Integer timeOut,
+                                     boolean force) {
         Map<String, Object> param = new HashMap<>();
         param.put("vhost", "__defaultVhost__");
         param.put("app", app);
@@ -349,10 +355,17 @@ public class ZLMRESTfulUtils {
         param.put("enable_audio", enable_audio?1:0);
         param.put("rtp_type", rtp_type);
         param.put("timeout_sec", timeOut);
-        // 拉流重试次数,默认为3
-        param.put("retry_count", -1);
-        param.put("force", 1);
+        // 首次失败后由 ZLM 重试一次，后续重拉由业务定时任务控制
+        param.put("retry_count", 1);
+        // 后台管理的代理需要保留首次失败记录，才能执行 ZLM 的一次内部重试。
+        param.put("force", force ? 1 : 0);
         return sendPost(mediaServerItem, "addStreamProxy",param, null, 20);
+    }
+
+    public JSONObject listStreamProxy(MediaServer mediaServer, String key) {
+        Map<String, Object> param = new HashMap<>();
+        param.put("key", key);
+        return sendPost(mediaServer, "listStreamProxy", param, null);
     }
 
     public JSONObject closeStreams(MediaServer mediaServerItem, String app, String stream) {

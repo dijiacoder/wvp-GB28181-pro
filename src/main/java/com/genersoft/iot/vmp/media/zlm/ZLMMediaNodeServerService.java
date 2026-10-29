@@ -257,7 +257,7 @@ public class ZLMMediaNodeServerService implements IMediaNodeServerService {
     @Override
     public MediaInfo getMediaInfo(MediaServer mediaServer, String app, String stream) {
         JSONObject jsonObject = zlmresTfulUtils.getMediaInfo(mediaServer, app, "rtsp", stream);
-        if (jsonObject.getInteger("code") != 0) {
+        if (jsonObject == null || !Integer.valueOf(0).equals(jsonObject.getInteger("code"))) {
             return null;
         }
         return MediaInfo.getInstance(jsonObject, mediaServer, userSetting.getServerId());
@@ -463,6 +463,9 @@ public class ZLMMediaNodeServerService implements IMediaNodeServerService {
         MediaInfo mediaInfo = getMediaInfo(mediaServer, streamProxy.getApp(), streamProxy.getStream());
 
         if (mediaInfo != null) {
+            if (!"ffmpeg".equalsIgnoreCase(streamProxy.getType())) {
+                return;
+            }
             closeStreams(mediaServer, streamProxy.getApp(), streamProxy.getStream());
         }
 
@@ -475,8 +478,19 @@ public class ZLMMediaNodeServerService implements IMediaNodeServerService {
                     streamProxy.getTimeout(), streamProxy.isEnableAudio(), streamProxy.isEnableMp4(),
                     streamProxy.getFfmpegCmdKey());
         }else {
+            String key = "__defaultVhost__/" + streamProxy.getApp() + "/" + streamProxy.getStream();
+            JSONObject proxies = zlmresTfulUtils.listStreamProxy(mediaServer, key);
+            if (proxies == null || !Integer.valueOf(0).equals(proxies.getInteger("code"))) {
+                throw new ControllerException(ErrorCode.ERROR100.getCode(), "查询拉流代理失败");
+            }
+            JSONArray list = proxies.getJSONArray("data");
+            if (list != null && !list.isEmpty()) {
+                // ZLM 仍在连接或内部重试，业务层只监听结果，不重复创建代理。
+                return;
+            }
             jsonObject = zlmresTfulUtils.addStreamProxy(mediaServer, streamProxy.getApp(), streamProxy.getStream(), streamProxy.getSrcUrl().trim(),
-                    streamProxy.isEnableAudio(), streamProxy.isEnableMp4(), streamProxy.getRtspType(), streamProxy.getTimeout());
+                    streamProxy.isEnableAudio(), streamProxy.isEnableMp4(), streamProxy.getRtspType(),
+                    streamProxy.getTimeout() > 0 ? streamProxy.getTimeout() : 15, true);
         }
         if (jsonObject == null) {
             throw new ControllerException(ErrorCode.ERROR100.getCode(), "请求失败");

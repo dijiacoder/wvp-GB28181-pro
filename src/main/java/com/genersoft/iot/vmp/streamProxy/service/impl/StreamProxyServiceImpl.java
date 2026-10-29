@@ -63,6 +63,9 @@ public class StreamProxyServiceImpl implements IStreamProxyService {
     private IStreamProxyPlayService playService;
 
     @Autowired
+    private StreamProxyBackgroundTask backgroundTask;
+
+    @Autowired
     private IMediaServerService mediaServerService;
 
     @Autowired
@@ -142,9 +145,6 @@ public class StreamProxyServiceImpl implements IStreamProxyService {
     public void save(StreamProxyParam param, ErrorCallback<StreamInfo> callback) {
         // 兼容旧接口
         StreamProxy streamProxyInDb = getStreamProxyByAppAndStream(param.getApp(), param.getStream());
-        if (streamProxyInDb != null && streamProxyInDb.getPulling() != null && streamProxyInDb.getPulling()) {
-            playService.stopProxy(streamProxyInDb);
-        }
         if (param.getMediaServerId().equals("auto")) {
             param.setMediaServerId(null);
         }
@@ -153,17 +153,14 @@ public class StreamProxyServiceImpl implements IStreamProxyService {
         if (streamProxyInDb == null) {
             add(streamProxy);
         } else {
-            try {
-                playService.stopProxy(streamProxyInDb);
-            } catch (ControllerException ignored) {
-            }
-            streamProxyMapper.delete(streamProxyInDb.getId());
+            playService.removeProxy(streamProxyInDb, () -> {
+                backgroundTask.cancel(streamProxyInDb);
+                streamProxyMapper.delete(streamProxyInDb.getId());
+            });
             add(streamProxy);
         }
 
-        if (param.isEnable()) {
-            playService.startProxy(streamProxy, callback);
-        }
+        callback.run(ErrorCode.SUCCESS.getCode(), "保存成功，后台将自动处理拉流", null);
     }
 
     @Override
@@ -194,13 +191,13 @@ public class StreamProxyServiceImpl implements IStreamProxyService {
 
     private void delete(StreamProxy streamProxy) {
         Assert.notNull(streamProxy, "代理不可为NULL");
-        if (streamProxy.getPulling() != null && streamProxy.getPulling()) {
-            playService.stopProxy(streamProxy);
-        }
-        if (streamProxy.getGbId() > 0) {
-            gbChannelService.delete(streamProxy.getGbId());
-        }
-        streamProxyMapper.delete(streamProxy.getId());
+        playService.removeProxy(streamProxy, () -> {
+            backgroundTask.cancel(streamProxy);
+            if (streamProxy.getGbId() > 0) {
+                gbChannelService.delete(streamProxy.getGbId());
+            }
+            streamProxyMapper.delete(streamProxy.getId());
+        });
     }
 
     @Override
