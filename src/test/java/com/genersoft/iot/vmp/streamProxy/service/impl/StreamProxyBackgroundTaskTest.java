@@ -2,6 +2,7 @@ package com.genersoft.iot.vmp.streamProxy.service.impl;
 
 import com.genersoft.iot.vmp.common.StreamInfo;
 import com.genersoft.iot.vmp.conf.UserSetting;
+import com.genersoft.iot.vmp.mqtt.UavOnlineStatusService;
 import com.genersoft.iot.vmp.service.bean.ErrorCallback;
 import com.genersoft.iot.vmp.streamProxy.bean.StreamProxy;
 import com.genersoft.iot.vmp.streamProxy.dao.StreamProxyMapper;
@@ -29,7 +30,8 @@ class StreamProxyBackgroundTaskTest {
     private final Clock clock = mock(Clock.class);
     private final ScheduledExecutorService workers = mock(ScheduledExecutorService.class);
     private final ScheduledFuture<?> future = mock(ScheduledFuture.class);
-    private final StreamProxyBackgroundTask task = new StreamProxyBackgroundTask(mapper, play, settings, clock, workers);
+    private final UavOnlineStatusService onlineStatus = mock(UavOnlineStatusService.class);
+    private final StreamProxyBackgroundTask task = new StreamProxyBackgroundTask(mapper, play, settings, clock, workers, onlineStatus);
     private StreamProxy proxy;
 
     @BeforeEach
@@ -150,6 +152,52 @@ class StreamProxyBackgroundTaskTest {
         verify(future).cancel(false);
         late.run(0, "late", null);
         verify(workers, times(1)).schedule(any(Runnable.class), anyLong(), any());
+    }
+
+    @Test
+    void failedDronePullChecksFullSerialAndStillRetriesWhenRedisFails() {
+        proxy.setApp("drone");
+        proxy.setStream("1581F5BMD235X0014JPR");
+        doThrow(new IllegalStateException("DESCRIBE:401 Unauthorized"))
+                .when(play).startInBackground(any(), any());
+        when(onlineStatus.isOnline(proxy.getStream())).thenThrow(new IllegalStateException("redis unavailable"));
+        activate();
+        Runnable pull = scheduled(0, 1).get(0);
+        assertDoesNotThrow(pull::run);
+        verify(onlineStatus).isOnline("1581F5BMD235X0014JPR");
+        assertSame(pull, scheduled(11, 1).get(0));
+    }
+
+    @Test
+    void offlineDroneFailureIsErrorWhileOnlineDroneFailureIsWarning() {
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+                org.slf4j.LoggerFactory.getLogger(StreamProxyBackgroundTask.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            proxy.setApp("drone");
+            proxy.setStream("1581F5BMD235X0014JPR");
+            doThrow(new IllegalStateException("DESCRIBE:401 Unauthorized"))
+                    .when(play).startInBackground(any(), any());
+            when(onlineStatus.isOnline(proxy.getStream())).thenReturn(false, true);
+            activate();
+            Runnable pull = scheduled(0, 1).get(0);
+            pull.run();
+            assertTrue(appender.list.stream().anyMatch(event ->
+                    event.getLevel() == ch.qos.logback.classic.Level.ERROR
+                            && event.getFormattedMessage().contains("属于不正常情况")));
+            appender.list.clear();
+            pull.run();
+            assertTrue(appender.list.stream().anyMatch(event ->
+                    event.getLevel() == ch.qos.logback.classic.Level.WARN
+                            && event.getFormattedMessage().contains("[后台拉流] 失败")));
+            scheduled(11, 2);
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
     }
 
     private void activate() {

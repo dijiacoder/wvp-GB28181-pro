@@ -1,6 +1,7 @@
 package com.genersoft.iot.vmp.streamProxy.service.impl;
 
 import com.genersoft.iot.vmp.conf.UserSetting;
+import com.genersoft.iot.vmp.mqtt.UavOnlineStatusService;
 import com.genersoft.iot.vmp.streamProxy.bean.StreamProxy;
 import com.genersoft.iot.vmp.streamProxy.dao.StreamProxyMapper;
 import com.genersoft.iot.vmp.streamProxy.service.IStreamProxyPlayService;
@@ -32,6 +33,7 @@ public class StreamProxyBackgroundTask {
     private final StreamProxyMapper mapper;
     private final IStreamProxyPlayService playService;
     private final UserSetting settings;
+    private final UavOnlineStatusService onlineStatus;
     private final Clock clock;
     private final ScheduledExecutorService workers;
     private final Map<String, PullTask> tasks = new ConcurrentHashMap<>();
@@ -41,15 +43,17 @@ public class StreamProxyBackgroundTask {
 
     @Autowired
     public StreamProxyBackgroundTask(StreamProxyMapper mapper, IStreamProxyPlayService playService,
-                                     UserSetting settings) {
-        this(mapper, playService, settings, Clock.systemUTC(), createWorkers());
+                                     UserSetting settings, UavOnlineStatusService onlineStatus) {
+        this(mapper, playService, settings, Clock.systemUTC(), createWorkers(), onlineStatus);
     }
 
     StreamProxyBackgroundTask(StreamProxyMapper mapper, IStreamProxyPlayService playService,
-                              UserSetting settings, Clock clock, ScheduledExecutorService workers) {
+                              UserSetting settings, Clock clock, ScheduledExecutorService workers,
+                              UavOnlineStatusService onlineStatus) {
         this.mapper = mapper;
         this.playService = playService;
         this.settings = settings;
+        this.onlineStatus = onlineStatus;
         this.clock = clock;
         this.workers = workers;
     }
@@ -175,8 +179,22 @@ public class StreamProxyBackgroundTask {
                 final long delay = interval;
                 playService.startInBackground(proxy, (code, msg, info) -> completed.complete(delay));
             } catch (Exception ex) {
-                log.warn("[后台拉流] 失败，app/stream：{}，拉流地址：{}，异常类型：{}，原因：{}",
-                        key, srcUrl, ex.getClass().getName(), ex.getMessage(), ex);
+                boolean abnormal = true;
+                if (key.startsWith("drone/")) {
+                    String uavSN = key.substring("drone/".length());
+                    try {
+                        abnormal = onlineStatus.isOnline(uavSN);
+                        if (!abnormal) {
+                            log.info("[后台拉流] 无人机不在线，拉流失败属于正常情况，uavSN：{}", uavSN);
+                        }
+                    } catch (Exception statusException) {
+                        log.warn("[后台拉流] 查询无人机在线状态失败，uavSN：{}", uavSN, statusException);
+                    }
+                }
+                if (abnormal) {
+                    log.error("[后台拉流] 失败，app/stream：{}，拉流地址：{}，异常类型：{}，原因：{}",
+                            key, srcUrl, ex.getClass().getName(), ex.getMessage(), ex);
+                }
                 // 配置查询也可能失败，此时同样保留任务，稍后重试。
                 completed.complete(interval);
             } finally {

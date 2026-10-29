@@ -3,3 +3,12 @@ spring:
     name: wvp
   profiles:
     active: 274-dev
+
+# MQTT 产品状态订阅，支持通过环境变量覆盖
+mqtt:
+  enabled: ${MQTT_ENABLED:true}
+  url: ${MQTT_URL:tcp://172.16.5.20:1883}
+  username: ${MQTT_USERNAME:admin}
+  password: ${MQTT_PASSWORD:Cykj@12345+}
+  # + 匹配单层产品 ID，例如 thing/product/device001/state
+  topic: ${MQTT_TOPIC:thing/product/+/state}
