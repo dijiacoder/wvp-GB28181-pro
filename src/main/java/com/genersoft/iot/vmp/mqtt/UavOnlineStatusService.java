@@ -20,7 +20,7 @@ public class UavOnlineStatusService {
     public void handleMessage(String topic, String payload) {
         String[] parts = topic.split("/", -1);
         if (parts.length != 4 || !"thing".equals(parts[0]) || !"product".equals(parts[1])
-                || !"state".equals(parts[3]) || !parts[2].contains("1581")) {
+                || !"osd".equals(parts[3]) || !parts[2].contains("1581")) {
             return;
         }
         String uavSN = parts[2];
@@ -30,7 +30,7 @@ public class UavOnlineStatusService {
             Integer modeCode = data == null ? null : data.getInteger("mode_code");
             if (modeCode != null && modeCode > 2) {
                 redisTemplate.opsForValue().set(uavSN, modeCode, 2, TimeUnit.SECONDS);
-                log.info("{},{}", uavSN, modeCode);
+//                log.info("{},{}", uavSN, modeCode);
             }
         } catch (Exception e) {
             // 单条坏消息或 Redis 故障不能使 MQTT 回调抛出异常而断开连接。
@@ -39,6 +39,6 @@ public class UavOnlineStatusService {
     }
 
     public boolean isOnline(String uavSN) {
-        return Boolean.TRUE.equals(redisTemplate.hasKey(uavSN));
+        return redisTemplate.hasKey(uavSN);
     }
 }
