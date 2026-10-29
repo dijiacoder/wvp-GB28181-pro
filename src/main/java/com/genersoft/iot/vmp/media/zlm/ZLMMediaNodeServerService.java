@@ -480,17 +480,22 @@ public class ZLMMediaNodeServerService implements IMediaNodeServerService {
         }else {
             String key = "__defaultVhost__/" + streamProxy.getApp() + "/" + streamProxy.getStream();
             JSONObject proxies = zlmresTfulUtils.listStreamProxy(mediaServer, key);
-            if (proxies == null || !Integer.valueOf(0).equals(proxies.getInteger("code"))) {
-                throw new ControllerException(ErrorCode.ERROR100.getCode(), "查询拉流代理失败");
-            }
-            JSONArray list = proxies.getJSONArray("data");
-            if (list != null && !list.isEmpty()) {
-                // ZLM 仍在连接或内部重试，业务层只监听结果，不重复创建代理。
-                return;
+            if (proxies != null && Integer.valueOf(0).equals(proxies.getInteger("code"))) {
+                JSONArray list = proxies.getJSONArray("data");
+                if (list != null && !list.isEmpty()) {
+                    // 已有代理仍在连接或内部重试，不重复创建。
+                    return;
+                }
+                // 尚未添加的代理查不到是正常情况，继续创建。
+            } else {
+                String detail = proxies == null ? "无有效响应" : "code=" + proxies.getInteger("code")
+                        + ", httpStatus=" + proxies.getInteger("httpStatus") + ", msg=" + proxies.getString("msg");
+                log.warn("[拉流代理] 查询代理失败，继续尝试添加，mediaServerId：{}，key：{}，{}",
+                        mediaServer.getId(), key, detail);
             }
             jsonObject = zlmresTfulUtils.addStreamProxy(mediaServer, streamProxy.getApp(), streamProxy.getStream(), streamProxy.getSrcUrl().trim(),
                     streamProxy.isEnableAudio(), streamProxy.isEnableMp4(), streamProxy.getRtspType(),
-                    streamProxy.getTimeout() > 0 ? streamProxy.getTimeout() : 15, true);
+                    streamProxy.getTimeout() > 0 ? streamProxy.getTimeout() : 15);
         }
         if (jsonObject == null) {
             throw new ControllerException(ErrorCode.ERROR100.getCode(), "请求失败");

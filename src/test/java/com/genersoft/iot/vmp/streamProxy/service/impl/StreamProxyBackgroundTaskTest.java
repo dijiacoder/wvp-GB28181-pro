@@ -41,13 +41,13 @@ class StreamProxyBackgroundTaskTest {
     }
 
     @Test
-    void waitsThirtySecondsAndReusesTaskWhilePendingAndWaiting() {
+    void waitsTenSecondsAndReusesTaskWhilePendingAndWaiting() {
         task.check();
         task.ready();
-        when(clock.millis()).thenReturn(29999L);
+        when(clock.millis()).thenReturn(9999L);
         task.check();
         verifyNoInteractions(mapper, workers, play);
-        when(clock.millis()).thenReturn(30000L);
+        when(clock.millis()).thenReturn(10000L);
         task.check();
         Runnable pull = scheduled(0, 1).get(0);
         task.check();
@@ -56,7 +56,7 @@ class StreamProxyBackgroundTaskTest {
         task.check();
         verify(workers, times(1)).schedule(any(Runnable.class), anyLong(), any());
         callback().run(0, "ok", null);
-        assertSame(pull, scheduled(10, 1).get(0));
+        assertSame(pull, scheduled(11, 1).get(0));
         task.check();
         verify(workers, times(2)).schedule(any(Runnable.class), anyLong(), any());
     }
@@ -110,7 +110,7 @@ class StreamProxyBackgroundTaskTest {
         Runnable pull = scheduled(0, 1).get(0);
         when(mapper.select(1)).thenThrow(new IllegalStateException("db unavailable"));
         pull.run();
-        assertSame(pull, scheduled(15, 1).get(0));
+        assertSame(pull, scheduled(16, 1).get(0));
     }
 
     @Test
@@ -124,7 +124,7 @@ class StreamProxyBackgroundTaskTest {
             throw new IllegalStateException("failed");
         }).when(play).startInBackground(any(), any());
         scheduled(0, 1).get(0).run();
-        scheduled(10, 1);
+        scheduled(11, 1);
         verify(workers, times(2)).schedule(any(Runnable.class), anyLong(), any());
     }
 
@@ -154,7 +154,7 @@ class StreamProxyBackgroundTaskTest {
 
     private void activate() {
         task.ready();
-        when(clock.millis()).thenReturn(30000L);
+        when(clock.millis()).thenReturn(10000L);
         task.check();
     }
 

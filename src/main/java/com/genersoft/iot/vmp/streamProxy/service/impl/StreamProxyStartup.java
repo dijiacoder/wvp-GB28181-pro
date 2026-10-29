@@ -14,7 +14,7 @@ import javax.annotation.PreDestroy;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** 启动30秒后上报国标通道在线；实际拉流统一由 StreamProxyBackgroundTask 调度。 */
+/** 启动10秒后上报国标通道在线；实际拉流统一由 StreamProxyBackgroundTask 调度。 */
 @Slf4j
 @Component
 public class StreamProxyStartup {
@@ -37,7 +37,7 @@ public class StreamProxyStartup {
     @EventListener(ApplicationReadyEvent.class)
     public void startOnApplicationReady() {
         if (!stopping && started.compareAndSet(false, true)) {
-            tasks.startDelay(TASK_KEY, this::reportOnline, 30000);
+            tasks.startDelay(TASK_KEY, this::reportOnline, 10000);
         }
     }
 

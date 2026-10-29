@@ -69,6 +69,10 @@ public interface StreamProxyMapper {
             "</script>")
     void deleteByList(List<StreamProxy> streamProxiesForRemove);
 
+    @Update("UPDATE wvp_stream_proxy SET pulling=#{pulling}, media_server_id=#{mediaServerId} WHERE id=#{id}")
+    void updatePulling(@Param("id") int id, @Param("mediaServerId") String mediaServerId,
+                       @Param("pulling") boolean pulling);
+
     @Update("UPDATE wvp_stream_proxy " +
             "SET pulling=true " +
             "WHERE id=#{id}")

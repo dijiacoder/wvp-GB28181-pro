@@ -179,6 +179,7 @@ public class StreamProxyPlayServiceImpl implements IStreamProxyPlayService {
         if (streamProxy.getMediaServerId() != null) {
             StreamInfo streamInfo = mediaServerService.getStreamInfoByAppAndStreamWithCheck(streamProxy.getApp(), streamProxy.getStream(), streamProxy.getMediaServerId(), null, false);
             if (streamInfo != null) {
+                streamProxyMapper.updatePulling(streamProxy.getId(), streamProxy.getMediaServerId(), true);
                 finish(state, result, ErrorCode.SUCCESS.getCode(), ErrorCode.SUCCESS.getMsg(), streamInfo);
                 return;
             }
@@ -202,7 +203,8 @@ public class StreamProxyPlayServiceImpl implements IStreamProxyPlayService {
         final MediaServer selectedServer = mediaServer;
         state.mediaServer = mediaServer;
         streamProxy.setMediaServerId(mediaServer.getId());
-        streamProxyMapper.updateStream(streamProxy);
+        // 只更新本次确认的状态和节点，避免旧快照覆盖 streamKey 等字段。
+        streamProxyMapper.updatePulling(streamProxy.getId(), mediaServer.getId(), false);
         String timeOutTaskKey = UUID.randomUUID().toString();
         Hook rtpHook = Hook.getInstance(HookType.on_media_arrival, streamProxy.getApp(), streamProxy.getStream(), mediaServer.getId());
         state.cleanup = () -> {
@@ -216,6 +218,7 @@ public class StreamProxyPlayServiceImpl implements IStreamProxyPlayService {
                 }
                 StreamInfo info = mediaServerService.getStreamInfoByAppAndStream(selectedServer,
                         hookData.getApp(), hookData.getStream(), hookData.getMediaInfo(), null);
+                streamProxyMapper.updatePulling(streamProxy.getId(), selectedServer.getId(), true);
                 finish(state, result, InviteErrorCode.SUCCESS.getCode(), InviteErrorCode.SUCCESS.getMsg(), info);
             }
         });
@@ -228,6 +231,7 @@ public class StreamProxyPlayServiceImpl implements IStreamProxyPlayService {
         StreamInfo info = mediaServerService.getStreamInfoByAppAndStreamWithCheck(streamProxy.getApp(),
                 streamProxy.getStream(), mediaServer.getId(), null, false);
         if (info != null) {
+            streamProxyMapper.updatePulling(streamProxy.getId(), mediaServer.getId(), true);
             finish(state, result, ErrorCode.SUCCESS.getCode(), ErrorCode.SUCCESS.getMsg(), info);
         }
     }

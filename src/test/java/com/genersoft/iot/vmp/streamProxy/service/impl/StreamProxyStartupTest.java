@@ -28,7 +28,7 @@ class StreamProxyStartupTest {
     }
 
     @Test
-    void delaysReportingThirtySecondsAndSchedulesOnlyOnce() {
+    void delaysReportingTenSecondsAndSchedulesOnlyOnce() {
         StreamProxy enabled = proxy(1, true, null);
         StreamProxy disabled = proxy(2, false, null);
         StreamProxy remote = proxy(3, true, "remote");
@@ -62,7 +62,7 @@ class StreamProxyStartupTest {
 
     private Runnable delayed() {
         ArgumentCaptor<Runnable> work = ArgumentCaptor.forClass(Runnable.class);
-        verify(tasks).startDelay(eq("stream-proxy-startup-online"), work.capture(), eq(30000));
+        verify(tasks).startDelay(eq("stream-proxy-startup-online"), work.capture(), eq(10000));
         return work.getValue();
     }
 

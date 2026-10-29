@@ -25,7 +25,7 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** 每路一个独立任务，完成后延迟 timeout 秒再检查；线程由调度池复用。 */
+/** 每路一个独立任务，完成后延迟 timeout + 1 秒再检查；线程由调度池复用。 */
 @Slf4j
 @Component
 public class StreamProxyBackgroundTask {
@@ -69,9 +69,9 @@ public class StreamProxyBackgroundTask {
     @EventListener(ApplicationReadyEvent.class)
     public synchronized void ready() {
         if (!ready) {
-            startAt = clock.millis() + 30000L;
+            startAt = clock.millis() + 10000L;
             ready = true;
-            log.info("[后台拉流] 应用启动完成，30秒后开始自动拉流");
+            log.info("[后台拉流] 应用启动完成，10秒后开始自动拉流");
         }
     }
 
@@ -154,24 +154,29 @@ public class StreamProxyBackgroundTask {
                 }
                 running = true;
             }
-            int interval = 15;
+            long interval = 16L;
+            String srcUrl = null;
             // 必须同时等到接口调用返回及收流结果完成，才安排下一轮。
             CompletableFuture<Void> submitted = new CompletableFuture<>();
-            CompletableFuture<Integer> completed = new CompletableFuture<>();
+            CompletableFuture<Long> completed = new CompletableFuture<>();
             submitted.thenCombine(completed, (returned, delay) -> delay).thenAccept(this::schedule);
             try {
                 StreamProxy proxy = mapper.select(id);
+                if (proxy != null) {
+                    srcUrl = proxy.getSrcUrl();
+                }
                 if (proxy == null || !eligible(proxy)
                         || !Objects.equals(key, proxy.getApp() + "/" + proxy.getStream())) {
                     tasks.remove(key, this);
                     cancel();
                     return;
                 }
-                interval = proxy.getTimeout() > 0 ? proxy.getTimeout() : 15;
-                final int delay = interval;
+                interval = (proxy.getTimeout() > 0 ? (long) proxy.getTimeout() : 15L) + 1L;
+                final long delay = interval;
                 playService.startInBackground(proxy, (code, msg, info) -> completed.complete(delay));
             } catch (Exception ex) {
-                log.warn("[后台拉流] 失败，app/stream：{}，原因：{}", key, ex.getMessage());
+                log.warn("[后台拉流] 失败，app/stream：{}，拉流地址：{}，异常类型：{}，原因：{}",
+                        key, srcUrl, ex.getClass().getName(), ex.getMessage(), ex);
                 // 配置查询也可能失败，此时同样保留任务，稍后重试。
                 completed.complete(interval);
             } finally {

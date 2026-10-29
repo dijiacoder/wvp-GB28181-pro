@@ -271,6 +271,35 @@ class StreamProxyPlayServiceImplTest {
         }
     }
 
+    @Test
+    void backgroundReconcilesAlreadyOnlineStreamWithoutHook() {
+        StreamProxy configured = proxy();
+        configured.setMediaServerId("zlm");
+        configured.setPulling(false);
+        when(mapper.select(1)).thenReturn(configured);
+        when(media.getStreamInfoByAppAndStreamWithCheck("live", "test", "zlm", null, false))
+                .thenReturn(new StreamInfo());
+        service.startInBackground(configured, (code, msg, data) -> assertEquals(0, code));
+        verify(mapper).updatePulling(1, "zlm", true);
+        verify(media, never()).startProxy(any(), any());
+    }
+
+    @Test
+    void backgroundMarksOfflineAndHookMarksOnlineWithoutOverwritingOtherFields() {
+        service.startInBackground(proxy(), (code, msg, data) -> {});
+        verify(mapper).updatePulling(1, "zlm", false);
+        ArgumentCaptor<HookSubscribe.Event> event = ArgumentCaptor.forClass(HookSubscribe.Event.class);
+        verify(hooks).addSubscribe(any(), event.capture());
+        HookData data = new HookData();
+        data.setApp("live");
+        data.setStream("test");
+        when(media.getStreamInfoByAppAndStream(eq(server), eq("live"), eq("test"), any(), isNull()))
+                .thenReturn(new StreamInfo());
+        event.getValue().response(data);
+        verify(mapper).updatePulling(1, "zlm", true);
+        verify(mapper, never()).updateStream(any());
+    }
+
     private Runnable timeout() {
         ArgumentCaptor<Runnable> task = ArgumentCaptor.forClass(Runnable.class);
         verify(tasks).startDelay(anyString(), task.capture(), eq(10000));

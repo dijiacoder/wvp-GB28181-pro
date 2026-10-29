@@ -37,27 +37,59 @@ class ZLMMediaNodeServerServiceProxyTest {
         result.put("data", data);
         when(api.listStreamProxy(server, "__defaultVhost__/live/test")).thenReturn(result);
         service.startProxy(server, proxy);
-        verify(api, never()).addStreamProxy(any(), any(), any(), any(), anyBoolean(), anyBoolean(), any(), any(), anyBoolean());
+        verify(api, never()).addStreamProxy(any(), any(), any(), any(), anyBoolean(), anyBoolean(), any(), any());
         verify(api, never()).closeStreams(any(), any(), any());
     }
 
     @Test
-    void failedExistenceQueryDoesNotCreateProxy() {
-        assertThrows(ControllerException.class, () -> service.startProxy(server, proxy));
-        verify(api, never()).addStreamProxy(any(), any(), any(), any(), anyBoolean(), anyBoolean(), any(), any(), anyBoolean());
+    void nullQueryResponseStillAttemptsCreation() {
+        assertCreatedAfterQuery(null);
+    }
+
+    @Test
+    void failedQueryResponseStillAttemptsCreation() {
+        JSONObject response = new JSONObject();
+        response.put("code", -100);
+        response.put("msg", "query failed");
+        assertCreatedAfterQuery(response);
+    }
+
+    @Test
+    void unsupportedQueryApiStillAttemptsCreation() {
+        JSONObject response = new JSONObject();
+        response.put("code", -2);
+        response.put("httpStatus", 404);
+        response.put("msg", "ZLM接口 listStreamProxy 返回HTTP 404");
+        assertCreatedAfterQuery(response);
     }
 
     @Test
     void missingProxyCanBeCreatedAgain() {
         JSONObject result = new JSONObject();
         result.put("code", 0);
-        when(api.listStreamProxy(server, "__defaultVhost__/live/test")).thenReturn(result);
+        result.put("data", new JSONArray());
+        assertCreatedAfterQuery(result);
+    }
+
+    @Test
+    void creationFailureIsStillReportedWhenQueryFails() {
+        JSONObject added = new JSONObject();
+        added.put("code", -1);
+        added.put("msg", "add failed");
+        when(api.addStreamProxy(eq(server), eq("live"), eq("test"), anyString(), anyBoolean(), anyBoolean(), any(), eq(10)))
+                .thenReturn(added);
+        ControllerException exception = assertThrows(ControllerException.class, () -> service.startProxy(server, proxy));
+        assertEquals("add failed", exception.getMessage());
+    }
+
+    private void assertCreatedAfterQuery(JSONObject response) {
+        when(api.listStreamProxy(server, "__defaultVhost__/live/test")).thenReturn(response);
         JSONObject added = new JSONObject();
         added.put("code", 0);
         added.put("data", new JSONObject());
-        when(api.addStreamProxy(eq(server), eq("live"), eq("test"), anyString(), anyBoolean(), anyBoolean(), any(), eq(10), eq(true)))
+        when(api.addStreamProxy(eq(server), eq("live"), eq("test"), anyString(), anyBoolean(), anyBoolean(), any(), eq(10)))
                 .thenReturn(added);
-        service.startProxy(server, proxy);
-        verify(api).addStreamProxy(eq(server), eq("live"), eq("test"), anyString(), anyBoolean(), anyBoolean(), any(), eq(10), eq(true));
+        assertDoesNotThrow(() -> service.startProxy(server, proxy));
+        verify(api).addStreamProxy(eq(server), eq("live"), eq("test"), anyString(), anyBoolean(), anyBoolean(), any(), eq(10));
     }
 }
