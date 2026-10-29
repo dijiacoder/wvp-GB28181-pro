@@ -179,20 +179,20 @@ public class StreamProxyBackgroundTask {
                 final long delay = interval;
                 playService.startInBackground(proxy, (code, msg, info) -> completed.complete(delay));
             } catch (Exception ex) {
-                boolean abnormal = true;
+                boolean isOnline = true;
                 if (key.startsWith("drone/")) {
                     String uavSN = key.substring("drone/".length());
                     try {
-                        abnormal = onlineStatus.isOnline(uavSN);
-                        if (!abnormal) {
-                            log.info("[后台拉流] 无人机不在线，拉流失败属于正常情况，uavSN：{}", uavSN);
+                        isOnline = onlineStatus.isOnline(uavSN);
+                        if (!isOnline) {
+                            log.info("[后台拉流] 无人机不在线，拉流失败，uavSN：{}", uavSN);
                         }
                     } catch (Exception statusException) {
                         log.warn("[后台拉流] 查询无人机在线状态失败，uavSN：{}", uavSN, statusException);
                     }
                 }
-                if (abnormal) {
-                    log.error("[后台拉流] 失败，app/stream：{}，拉流地址：{}，异常类型：{}，原因：{}",
+                if (isOnline) {
+                    log.error("[后台拉流] 无人机在线，拉流失败，app/stream：{}，拉流地址：{}，异常类型：{}，原因：{}",
                             key, srcUrl, ex.getClass().getName(), ex.getMessage(), ex);
                 }
                 // 配置查询也可能失败，此时同样保留任务，稍后重试。
