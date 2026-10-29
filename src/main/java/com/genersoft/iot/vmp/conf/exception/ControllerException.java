@@ -19,6 +19,11 @@ public class ControllerException extends RuntimeException{
         this.msg = errorCode.getMsg();
     }
 
+    @Override
+    public String getMessage() {
+        return msg;
+    }
+
     public int getCode() {
         return code;
     }
