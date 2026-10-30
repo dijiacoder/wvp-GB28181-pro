@@ -34,7 +34,7 @@ public class UavOnlineStatusService {
             JSONObject json = JSONObject.parseObject(payload);
             JSONObject data = json == null ? null : json.getJSONObject("data");
             Integer modeCode = data == null ? null : data.getInteger("mode_code");
-            if (modeCode != null && modeCode >= 0) {
+            if (modeCode != null && modeCode >= 1) {
                 redisTemplate.opsForValue().set(uavSN, modeCode, ONLINE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 if (events != null) {
                     events.publishEvent(new UavHeartbeatEvent(uavSN));
