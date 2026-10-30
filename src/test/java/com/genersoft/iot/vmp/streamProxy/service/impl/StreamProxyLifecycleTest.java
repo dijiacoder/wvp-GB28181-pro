@@ -128,7 +128,7 @@ class StreamProxyLifecycleTest {
             f.heartbeat();
             f.runNext();
             for (int i = 1; i <= 3; i++) {
-                f.now.set(TimeUnit.SECONDS.toNanos(i * 3L));
+                f.now.set(TimeUnit.SECONDS.toNanos(i * 6L));
                 f.heartbeat();
                 f.runNext();
             }
@@ -243,7 +243,7 @@ class StreamProxyLifecycleTest {
             f.runNext();
             f.now.set(TimeUnit.MILLISECONDS.toNanos(500));
             f.heartbeat();
-            f.now.set(TimeUnit.SECONDS.toNanos(4));
+            f.now.set(TimeUnit.SECONDS.toNanos(6));
             f.heartbeat();
             assertEquals(1, f.pending.size()); // 不并行启动第二个任务。
             f.runNext();
@@ -259,7 +259,7 @@ class StreamProxyLifecycleTest {
             f.heartbeat();
             f.runNext();
             f.converterExists = true;
-            f.now.set(TimeUnit.SECONDS.toNanos(3));
+            f.now.set(TimeUnit.SECONDS.toNanos(6));
             f.heartbeat();
             f.runNext();
             verify(f.service).add(any());
@@ -276,7 +276,7 @@ class StreamProxyLifecycleTest {
                     .when(f.play).startInBackground(any(), any());
             f.heartbeat();
             f.runNext();
-            f.now.set(TimeUnit.SECONDS.toNanos(3));
+            f.now.set(TimeUnit.SECONDS.toNanos(6));
             f.heartbeat();
             assertTrue(f.pending.isEmpty());
             assertEquals(1, f.lookups.get());

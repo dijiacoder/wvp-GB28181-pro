@@ -19,12 +19,12 @@ class UavOnlineStatusServiceTest {
     private final String topic = "thing/product/" + sn + "/osd";
 
     @Test
-    void everyQualifyingMessageRefreshesTwoSecondTtlOnFullSerial() {
+    void everyQualifyingMessageRefreshesFiveSecondTtlOnFullSerial() {
         when(redis.opsForValue()).thenReturn(values);
         service.handleMessage(topic, "{\"data\":{\"mode_code\":3}}");
         service.handleMessage(topic, "{\"data\":{\"mode_code\":4}}");
-        verify(values).set(sn, 3, 2, TimeUnit.SECONDS);
-        verify(values).set(sn, 4, 2, TimeUnit.SECONDS);
+        verify(values).set(sn, 3, 5, TimeUnit.SECONDS);
+        verify(values).set(sn, 4, 5, TimeUnit.SECONDS);
     }
 
     @Test
@@ -40,7 +40,7 @@ class UavOnlineStatusServiceTest {
     @Test
     void redisWriteFailureDoesNotEscapeMqttCallback() {
         when(redis.opsForValue()).thenReturn(values);
-        doThrow(new IllegalStateException("redis unavailable")).when(values).set(sn, 3, 2, TimeUnit.SECONDS);
+        doThrow(new IllegalStateException("redis unavailable")).when(values).set(sn, 3, 5, TimeUnit.SECONDS);
         assertDoesNotThrow(() -> service.handleMessage(topic, "{\"data\":{\"mode_code\":3}}"));
     }
 
