@@ -18,10 +18,13 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.util.ObjectUtils;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import javax.annotation.PreDestroy;
 import java.io.IOException;
 import java.util.Map;
+import java.util.Set;
 import java.util.Objects;
 import java.util.concurrent.*;
 
@@ -39,6 +42,8 @@ public class StreamProxyBackgroundTask {
     private final UavOnlineStatusService onlineStatus;
     private final ScheduledExecutorService workers;
     private final Map<String, PullTask> tasks = new ConcurrentHashMap<>();
+    // 独立于 PullTask，避免心跳抖动/任务重建重复停启同一转换器；应用重启后重新初始化。
+    private final Set<String> initializedConverters = ConcurrentHashMap.newKeySet();
     private volatile boolean stopping;
     @Value("${sikong.base-url:}") private String baseUrl;
     @Value("${sikong.username:}") private String username;
@@ -67,24 +72,74 @@ public class StreamProxyBackgroundTask {
 
     @EventListener
     public void onHeartbeat(UavHeartbeatEvent event) {
-        if (stopping || tasks.containsKey(event.getSn())) {
+        while (!stopping) {
+            PullTask task = tasks.get(event.getSn());
+            boolean created = false;
+            if (task == null) {
+                PullTask candidate = new PullTask(event.getSn());
+                PullTask existing = tasks.putIfAbsent(event.getSn(), candidate);
+                task = existing == null ? candidate : existing;
+                created = existing == null;
+            }
+            synchronized (task) {
+                if (tasks.get(event.getSn()) != task) {
+                    continue;
+                }
+                long now = nanoTime();
+                if (task.lastHeartbeat != Long.MIN_VALUE
+                        && now - task.lastHeartbeat >= TimeUnit.SECONDS.toNanos(UavOnlineStatusService.ONLINE_TIMEOUT_SECONDS)) {
+                    task.generation++;
+                    task.replacement = null;
+                    task.disabled = false;
+                }
+                task.lastHeartbeat = now;
+            }
+            if (created) {
+                task.schedule(0);
+            }
             return;
-        }
-        PullTask task = new PullTask(event.getSn());
-        // containsKey 仅是高频心跳的快速路径，原子注册保证并发首次上报也只启动一次。
-        if (tasks.putIfAbsent(event.getSn(), task) == null) {
-            task.schedule(0);
         }
     }
 
-    public synchronized void cancel(StreamProxy proxy) {
-        if (!"drone".equals(proxy.getApp())) {
-            return;
-        }
+    long nanoTime() { return System.nanoTime(); }
+
+    public void cancel(StreamProxy proxy) {
+        if (!"drone".equals(proxy.getApp())) { return; }
         PullTask task = tasks.get(proxy.getStream());
         if (task != null) {
-            // 保留会话占位，避免下一条心跳立即重建被手动删除/停用的代理。
-            task.disabled = true;
+            // 与写入、提交共用每 SN 的锁；调用者必须在获取播放状态锁之前取消。
+            synchronized (task.mutationLock) {
+                synchronized (task) {
+                    StreamProxy current = task.replacement != null ? task.replacement : task.proxy;
+                    if (current != null && current.getId() > 0 && current.getId() != proxy.getId()) {
+                        return; // 旧配置的迟到取消不能停用已替换的新配置。
+                    }
+                    task.disabled = true;
+                }
+            }
+            if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override
+                    public void afterCompletion(int status) {
+                        if (status == STATUS_ROLLED_BACK && tasks.get(proxy.getStream()) == task) {
+                            StreamProxyBackgroundTask.this.resume(proxy);
+                        }
+                    }
+                });
+            }
+        }
+    }
+
+    /** 替换配置提交后恢复已有在线会话，不等待下一次开机。 */
+    public void resume(StreamProxy proxy) {
+        if (!"drone".equals(proxy.getApp())) { return; }
+        PullTask task = tasks.get(proxy.getStream());
+        if (task != null) {
+            synchronized (task) {
+                task.replacement = proxy;
+                task.generation++;
+                task.disabled = false;
+            }
         }
     }
 
@@ -100,11 +155,20 @@ public class StreamProxyBackgroundTask {
         api.setLiveStreamConverterEnabled(uuid, enable);
     }
 
+    void awaitConverter() throws InterruptedException { Thread.sleep(1000L); }
+
     private class PullTask implements Runnable {
         private final String sn;
         private StreamProxy proxy;
         private boolean initialized;
+        private boolean converterSetupAttempted;
+        private String converterUrl;
         private volatile boolean disabled;
+        private final Object mutationLock = new Object();
+        private long lastHeartbeat = Long.MIN_VALUE;
+        private volatile long generation;
+        private long runningGeneration = -1;
+        private StreamProxy replacement;
 
         PullTask(String sn) { this.sn = sn; }
 
@@ -127,79 +191,129 @@ public class StreamProxyBackgroundTask {
         }
 
         boolean online() {
-            return !stopping && tasks.get(sn) == this && onlineStatus.isOnline(sn);
+            return !stopping && !disabled && generation == runningGeneration
+                    && tasks.get(sn) == this && onlineStatus.isOnline(sn);
+        }
+
+        private synchronized void disableCurrentSession() {
+            if (generation == runningGeneration) { disabled = true; }
         }
 
         @Override
         public void run() {
             long delay = 2;
             boolean submitted = false;
+            String stage = "检查在线状态";
+            String rtspUrl = proxy == null ? null : proxy.getSrcUrl();
             try {
-                if (!online()) {
-                    tasks.remove(sn, this);
-                    return;
+                synchronized (this) {
+                    if (stopping || tasks.get(sn) != this) { return; }
+                    if (!onlineStatus.isOnline(sn)) {
+                        tasks.remove(sn, this);
+                        return;
+                    }
+                    if (disabled) { return; }
+                    if (runningGeneration != generation) {
+                        runningGeneration = generation;
+                        converterSetupAttempted = false;
+                        initialized = false;
+                        proxy = null;
+                        converterUrl = null;
+                        if (replacement != null) {
+                            proxy = replacement;
+                            converterUrl = proxy.getSrcUrl();
+                            converterSetupAttempted = true;
+                            initialized = true;
+                            replacement = null;
+                        }
+                    }
                 }
-                if (disabled) {
-                    return;
-                }
-                if (!initialized) {
+                if (!converterSetupAttempted) {
+                    stage = "司空认证";
                     SikongApiUtils api = client();
+                    stage = "查询转换器";
                     JSONObject converter = getConverter(api, sn);
                     if (converter == null) {
                         log.warn("[MQTT拉流] 未找到 RTSP 转换器，SN={}", sn);
-                        disabled = true;
+                        disableCurrentSession();
                         return;
+                    }
+                    JSONObject option = converter.getJSONObject("schema_option");
+                    rtspUrl = option == null ? null : option.getString("rtsp_url");
+                    stage = "检查拉流地址";
+                    if (rtspUrl == null || rtspUrl.trim().isEmpty()) {
+                        throw new IOException("转换器缺少 schema_option.rtsp_url");
                     }
                     String uuid = converter.getString("uuid");
                     if (!online()) { return; }
-                    if (Boolean.TRUE.equals(converter.getBoolean("enable"))) {
+                    converterUrl = rtspUrl;
+                    if (uuid == null || uuid.trim().isEmpty()) {
+                        throw new IOException("转换器缺少 uuid");
+                    }
+                    Boolean enabled = converter.getBoolean("enable");
+                    if (enabled == null) { throw new IOException("转换器缺少 enable"); }
+                    converterSetupAttempted = true;
+                    boolean firstInitialization = initializedConverters.add(sn + "/" + uuid);
+                    if (firstInitialization && enabled) {
+                        stage = "关闭转换器";
+                        log.info("[MQTT拉流] 首次初始化，先关闭转换器，SN={}，uuid={}，serverId={}",
+                                sn, uuid, settings.getServerId());
                         setEnabled(api, uuid, false);
-                        Thread.sleep(1000L);
+                        awaitConverter();
                         if (!online()) { return; }
-                        setEnabled(api, uuid, true);
-                    } else if (Boolean.FALSE.equals(converter.getBoolean("enable"))) {
-                        setEnabled(api, uuid, true);
                     }
-                    Thread.sleep(1000L);
+                    if (firstInitialization || !enabled) {
+                        stage = "开启转换器";
+                        log.info("[MQTT拉流] 开启转换器，SN={}，uuid={}，serverId={}",
+                                sn, uuid, settings.getServerId());
+                        setEnabled(api, uuid, true);
+                        awaitConverter();
+                    }
                     if (!online()) { return; }
-                    JSONObject option = converter.getJSONObject("schema_option");
-                    String url = option == null ? null : option.getString("rtsp_url");
-                    if (url == null || url.trim().isEmpty()) {
-                        throw new IOException("转换器缺少 schema_option.rtsp_url");
-                    }
-                    proxy = streamProxyService.getStreamProxyByAppAndStream("drone", sn);
-                    if (proxy == null) {
-                        proxy = new StreamProxy();
-                        proxy.setApp("drone");
-                        proxy.setStream(sn);
-                        proxy.setType("default");
-                        proxy.setTimeout(15);
-                        proxy.setRtspType("0");
-                        proxy.setEnable(true);
-                        proxy.setServerId(settings.getServerId());
-                        proxy.setSrcUrl(url);
-                        streamProxyService.add(proxy);
-                    } else if (eligible(proxy)) {
-                        proxy.setSrcUrl(url);
-                        if (proxy.getId() == 0) {
-                            throw new ControllerException(ErrorCode.ERROR400.getCode(), "缺少代理信息的ID");
-                        }
-                        if (ObjectUtils.isEmpty(proxy.getRelatesMediaServerId())) {
-                            proxy.setRelatesMediaServerId(null);
-                        }
-                        if (ObjectUtils.isEmpty(proxy.getGbId())) {
-                            proxy.setGbDeviceId(null);
-                        }
-                        streamProxyService.update(proxy);
-                    } else {
-                        disabled = true;
-                        return;
-                    }
-                    initialized = true;
                 }
+                rtspUrl = converterUrl;
+                if (!initialized) {
+                    String url = converterUrl;
+                    stage = "查询代理";
+                    synchronized (mutationLock) {
+                        if (!online()) { return; }
+                        proxy = streamProxyService.getStreamProxyByAppAndStream("drone", sn);
+                        if (proxy == null) {
+                            proxy = new StreamProxy();
+                            proxy.setApp("drone");
+                            proxy.setStream(sn);
+                            proxy.setType("default");
+                            proxy.setTimeout(15);
+                            proxy.setRtspType("0");
+                            proxy.setEnable(true);
+                            proxy.setServerId(settings.getServerId());
+                            proxy.setSrcUrl(url);
+                            stage = "新增代理";
+                            streamProxyService.add(proxy);
+                        } else if (eligible(proxy)) {
+                            proxy.setSrcUrl(url);
+                            if (proxy.getId() == 0) {
+                                throw new ControllerException(ErrorCode.ERROR400.getCode(), "缺少代理信息的ID");
+                            }
+                            if (ObjectUtils.isEmpty(proxy.getRelatesMediaServerId())) {
+                                proxy.setRelatesMediaServerId(null);
+                            }
+                            if (ObjectUtils.isEmpty(proxy.getGbId())) {
+                                proxy.setGbDeviceId(null);
+                            }
+                            stage = "更新代理";
+                            streamProxyService.update(proxy);
+                        } else {
+                            disableCurrentSession();
+                            return;
+                        }
+                        initialized = true;
+                    }
+                }
+                stage = "读取代理配置";
                 StreamProxy current = mapper.select(proxy.getId());
                 if (current == null || !eligible(current)) {
-                    disabled = true;
+                    disableCurrentSession();
                     return;
                 }
                 delay = (current.getTimeout() > 0 ? current.getTimeout() : 15L) + 1;
@@ -209,7 +323,12 @@ public class StreamProxyBackgroundTask {
                 CompletableFuture<Void> completed = new CompletableFuture<>();
                 returned.thenCombine(completed, (a, b) -> null).thenRun(() -> schedule(retryDelay));
                 try {
-                    playService.startInBackground(current, (code, msg, info) -> completed.complete(null));
+                    stage = "发起拉流";
+                    rtspUrl = current.getSrcUrl();
+                    synchronized (mutationLock) {
+                        if (!online()) { completed.complete(null); return; }
+                        playService.startInBackground(current, (code, msg, info) -> completed.complete(null));
+                    }
                 } catch (Exception ex) {
                     completed.complete(null);
                     throw ex;
@@ -217,8 +336,12 @@ public class StreamProxyBackgroundTask {
                     submitted = true;
                     returned.complete(null);
                 }
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
             } catch (Exception ex) {
-                log.warn("[MQTT拉流] 任务失败，在线时将重试，SN={}，异常类型={}", sn, ex.getClass().getSimpleName());
+                Integer errorCode = ex instanceof ControllerException ? ((ControllerException) ex).getCode() : null;
+                log.warn("[MQTT拉流] 任务失败，在线时将重试，SN={}，阶段={}，RTSP URL={}，错误码={}，异常类型={}，原因={}",
+                        sn, stage, rtspUrl, errorCode, ex.getClass().getSimpleName(), ex.getMessage(), ex);
             } finally {
                 if (!submitted) { schedule(delay); }
             }
@@ -234,6 +357,7 @@ public class StreamProxyBackgroundTask {
     public synchronized void shutdown() {
         stopping = true;
         tasks.clear();
+        initializedConverters.clear();
         workers.shutdownNow();
     }
 }

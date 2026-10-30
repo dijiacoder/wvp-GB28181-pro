@@ -13,6 +13,7 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 @Service
 public class UavOnlineStatusService {
+    public static final long ONLINE_TIMEOUT_SECONDS = 2;
     private final RedisTemplate<Object, Object> redisTemplate;
 
     public UavOnlineStatusService(RedisTemplate<Object, Object> redisTemplate) {
@@ -33,8 +34,8 @@ public class UavOnlineStatusService {
             JSONObject json = JSONObject.parseObject(payload);
             JSONObject data = json == null ? null : json.getJSONObject("data");
             Integer modeCode = data == null ? null : data.getInteger("mode_code");
-            if (modeCode != null && modeCode >= 0) {
-                redisTemplate.opsForValue().set(uavSN, modeCode, 2, TimeUnit.SECONDS);
+            if (modeCode != null && modeCode >= 1) {
+                redisTemplate.opsForValue().set(uavSN, modeCode, ONLINE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 if (events != null) {
                     events.publishEvent(new UavHeartbeatEvent(uavSN));
                 }
@@ -46,6 +47,6 @@ public class UavOnlineStatusService {
     }
 
     public boolean isOnline(String uavSN) {
-        return redisTemplate.hasKey(uavSN);
+        return Boolean.TRUE.equals(redisTemplate.hasKey(uavSN));
     }
 }

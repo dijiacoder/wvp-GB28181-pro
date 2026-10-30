@@ -71,7 +71,7 @@ class StreamProxyBackgroundTaskTest {
     }
 
     @Test
-    void enabledConverterStopsBeforeRestartAndUsesNestedRtspUrl() throws Exception {
+    void enabledConverterRestartsOnceAndUsesNestedRtspUrl() throws Exception {
         for (boolean existing : new boolean[]{false, true}) {
             for (boolean enabled : new boolean[]{false, true}) {
                 StreamProxyMapper mapper = mock(StreamProxyMapper.class);

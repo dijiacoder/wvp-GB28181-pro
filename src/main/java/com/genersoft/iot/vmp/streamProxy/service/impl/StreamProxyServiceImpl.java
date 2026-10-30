@@ -35,6 +35,8 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.Assert;
 import org.springframework.util.ObjectUtils;
 
@@ -153,13 +155,22 @@ public class StreamProxyServiceImpl implements IStreamProxyService {
         if (streamProxyInDb == null) {
             add(streamProxy);
         } else {
+            backgroundTask.cancel(streamProxyInDb);
             playService.removeProxy(streamProxyInDb, () -> {
-                backgroundTask.cancel(streamProxyInDb);
                 streamProxyMapper.delete(streamProxyInDb.getId());
             });
             add(streamProxy);
         }
 
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(
+                    new TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() { backgroundTask.resume(streamProxy); }
+                    });
+        } else {
+            backgroundTask.resume(streamProxy);
+        }
         callback.run(ErrorCode.SUCCESS.getCode(), "保存成功，后台将自动处理拉流", null);
     }
 
@@ -191,8 +202,8 @@ public class StreamProxyServiceImpl implements IStreamProxyService {
 
     private void delete(StreamProxy streamProxy) {
         Assert.notNull(streamProxy, "代理不可为NULL");
+        backgroundTask.cancel(streamProxy);
         playService.removeProxy(streamProxy, () -> {
-            backgroundTask.cancel(streamProxy);
             if (streamProxy.getGbId() > 0) {
                 gbChannelService.delete(streamProxy.getGbId());
             }
