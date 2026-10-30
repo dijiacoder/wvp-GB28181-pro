@@ -46,8 +46,11 @@ class StreamProxyLifecycleTest {
         final AtomicInteger lookups = new AtomicInteger();
         boolean converterExists = true;
         boolean converterEnabled = true;
+        String converterUrl = "rtsp://example/live";
         Runnable lookupHook = () -> {};
         Runnable enableHook = () -> {};
+        Runnable stopHook = () -> {};
+        Runnable awaitHook = () -> {};
         final StreamProxyBackgroundTask task;
 
         Fixture() {
@@ -73,16 +76,19 @@ class StreamProxyLifecycleTest {
             task = new StreamProxyBackgroundTask(mapper, play, mock(UserSetting.class), online, workers) {
                 @Override long nanoTime() { return now.get(); }
                 @Override SikongApiUtils client() { return null; }
-                @Override void awaitConverter() { }
+                @Override void awaitConverter() { awaitHook.run(); }
                 @Override JSONObject getConverter(SikongApiUtils api, String sn) {
                     lookups.incrementAndGet();
                     lookupHook.run();
-                    return converterExists ? JSONObject.parseObject("{\"uuid\":\"id\",\"enable\":" + converterEnabled + ","
+                    JSONObject result = converterExists ? JSONObject.parseObject("{\"uuid\":\"id\",\"enable\":" + converterEnabled + ","
                             + "\"schema_option\":{\"rtsp_url\":\"rtsp://example/live\"}}") : null;
+                    if (result != null) { result.getJSONObject("schema_option").put("rtsp_url", converterUrl); }
+                    return result;
                 }
                 @Override void setEnabled(SikongApiUtils api, String id, boolean enable) {
                     changes.add(enable);
                     if (enable) { enableHook.run(); }
+                    else { stopHook.run(); }
                 }
             };
             ReflectionTestUtils.setField(task, "streamProxyService", service);
@@ -115,7 +121,7 @@ class StreamProxyLifecycleTest {
             f.heartbeat();
             for (int i = 0; i < 4; i++) { f.runNext(); }
             assertEquals(Arrays.asList(false, true), f.changes);
-            assertEquals(1, f.lookups.get());
+            assertEquals(2, f.lookups.get());
             verify(f.play, times(4)).startInBackground(any(), any());
         }
     }
@@ -143,6 +149,251 @@ class StreamProxyLifecycleTest {
     }
 
     @Test
+    void fiveFailedAttemptsTriggerOneRestartBeforeNextPull() {
+        for (boolean callbackFailure : new boolean[]{false, true}) {
+            try (Fixture f = new Fixture()) {
+                if (callbackFailure) {
+                    doAnswer(call -> {
+                        call.<com.genersoft.iot.vmp.service.bean.ErrorCallback<com.genersoft.iot.vmp.common.StreamInfo>>getArgument(1)
+                                .run(-2, "timeout", null);
+                        return null;
+                    }).when(f.play).startInBackground(any(), any());
+                } else {
+                    doThrow(new ControllerException(500, "failed")).when(f.play).startInBackground(any(), any());
+                }
+                f.heartbeat();
+                for (int i = 0; i < 5; i++) { f.runNext(); }
+                assertEquals(Arrays.asList(false, true), f.changes);
+                f.runNext();
+                assertEquals(Arrays.asList(false, true, false, true), f.changes);
+                verify(f.play, times(6)).startInBackground(any(), any());
+                f.runNext();
+                assertEquals(4, f.changes.size());
+            }
+        }
+    }
+
+    @Test
+    void successfulPullResetsConsecutiveFailureCount() {
+        try (Fixture f = new Fixture()) {
+            AtomicInteger attempts = new AtomicInteger();
+            doAnswer(call -> {
+                int code = attempts.incrementAndGet() == 5 ? 0 : -2;
+                call.<com.genersoft.iot.vmp.service.bean.ErrorCallback<com.genersoft.iot.vmp.common.StreamInfo>>getArgument(1)
+                        .run(code, "result", null);
+                return null;
+            }).when(f.play).startInBackground(any(), any());
+            f.heartbeat();
+            for (int i = 0; i < 10; i++) { f.runNext(); }
+            assertEquals(Arrays.asList(false, true), f.changes);
+            f.runNext();
+            assertEquals(Arrays.asList(false, true, false, true), f.changes);
+        }
+    }
+
+    @Test
+    void callbackAndExceptionCountAsOneFailedAttempt() {
+        try (Fixture f = new Fixture()) {
+            doAnswer(call -> {
+                call.<com.genersoft.iot.vmp.service.bean.ErrorCallback<com.genersoft.iot.vmp.common.StreamInfo>>getArgument(1)
+                        .run(-2, "timeout", null);
+                throw new ControllerException(500, "same failure");
+            }).when(f.play).startInBackground(any(), any());
+            f.heartbeat();
+            for (int i = 0; i < 5; i++) { f.runNext(); }
+            assertEquals(Arrays.asList(false, true), f.changes);
+            f.runNext();
+            assertEquals(Arrays.asList(false, true, false, true), f.changes);
+        }
+    }
+
+    @Test
+    void offlineOrCancelledTaskDoesNotRestartConverterAfterFiveFailures() {
+        for (boolean offline : new boolean[]{true, false}) {
+            try (Fixture f = new Fixture()) {
+                doThrow(new ControllerException(500, "failed")).when(f.play).startInBackground(any(), any());
+                f.heartbeat();
+                for (int i = 0; i < 5; i++) { f.runNext(); }
+                if (offline) { when(f.online.isOnline("SN")).thenReturn(false); }
+                else { f.task.cancel(f.saved.get()); }
+                f.runNext();
+                assertEquals(Arrays.asList(false, true), f.changes);
+                verify(f.play, times(5)).startInBackground(any(), any());
+            }
+        }
+    }
+
+    @Test
+    void restartFailureDoesNotCauseContinuousConverterRestarts() {
+        try (Fixture f = new Fixture()) {
+            doThrow(new ControllerException(500, "failed")).when(f.play).startInBackground(any(), any());
+            f.heartbeat();
+            for (int i = 0; i < 5; i++) { f.runNext(); }
+            f.enableHook = () -> { throw new ControllerException(500, "restart failed"); };
+            f.runNext();
+            assertEquals(Arrays.asList(false, true, false, true), f.changes);
+            f.enableHook = () -> {};
+            f.runNext();
+            verify(f.play, times(6)).startInBackground(any(), any());
+            assertEquals(Arrays.asList(false, true, false, true, true), f.changes);
+        }
+    }
+
+    @Test
+    void cancellationDuringRestartOnlineCheckPreventsConverterClose() {
+        try (Fixture f = new Fixture()) {
+            doThrow(new ControllerException(500, "failed")).when(f.play).startInBackground(any(), any());
+            f.heartbeat();
+            for (int i = 0; i < 5; i++) { f.runNext(); }
+            f.lookupHook = () -> {
+                doAnswer(call -> {
+                    doReturn(true).when(f.online).isOnline("SN");
+                    f.task.cancel(f.saved.get());
+                    return true;
+                }).when(f.online).isOnline("SN");
+            };
+            f.runNext();
+            assertEquals(Arrays.asList(false, true), f.changes);
+            verify(f.play, times(5)).startInBackground(any(), any());
+        }
+    }
+
+    @Test
+    void replacementBetweenStopAndStartCompletesPendingEnable() {
+        try (Fixture f = new Fixture()) {
+            doThrow(new ControllerException(500, "failed")).when(f.play).startInBackground(any(), any());
+            f.heartbeat();
+            for (int i = 0; i < 5; i++) { f.runNext(); }
+            StreamProxy replacement = proxy(2, "rtsp://replacement");
+            f.awaitHook = () -> {
+                f.awaitHook = () -> {};
+                f.task.cancel(f.saved.get());
+                f.saved.set(replacement);
+                f.task.resume(replacement);
+            };
+            f.runNext();
+            assertEquals(Arrays.asList(false, true, false), f.changes);
+            f.runNext();
+            assertEquals(Arrays.asList(false, true, false, true), f.changes);
+            verify(f.play).startInBackground(same(replacement), any());
+        }
+    }
+
+    @Test
+    void cancellationWaitsForConverterRequestAndFencesLaterRequests() throws Exception {
+        try (Fixture f = new Fixture()) {
+            ExecutorService executor = Executors.newFixedThreadPool(2);
+            CountDownLatch stopped = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            doThrow(new ControllerException(500, "failed")).when(f.play).startInBackground(any(), any());
+            f.heartbeat();
+            for (int i = 0; i < 5; i++) { f.runNext(); }
+            f.stopHook = () -> {
+                stopped.countDown();
+                try { assertTrue(release.await(5, TimeUnit.SECONDS)); }
+                catch (InterruptedException e) { throw new AssertionError(e); }
+            };
+            try {
+                Future<?> run = executor.submit(f::runNext);
+                assertTrue(stopped.await(5, TimeUnit.SECONDS));
+                CountDownLatch cancelling = new CountDownLatch(1);
+                Future<?> cancel = executor.submit(() -> {
+                    cancelling.countDown();
+                    f.task.cancel(f.saved.get());
+                });
+                assertTrue(cancelling.await(5, TimeUnit.SECONDS));
+                assertThrows(TimeoutException.class, () -> cancel.get(100, TimeUnit.MILLISECONDS));
+                release.countDown();
+                cancel.get(5, TimeUnit.SECONDS);
+                run.get(5, TimeUnit.SECONDS);
+                int mutations = f.changes.size();
+                f.heartbeat();
+                f.runNext();
+                assertEquals(mutations, f.changes.size());
+            } finally {
+                release.countDown();
+                executor.shutdownNow();
+            }
+        }
+    }
+
+    @Test
+    void cancelledStopIsRecoveredByReplacementWithoutRepeatingClose() {
+        try (Fixture f = new Fixture()) {
+            doThrow(new ControllerException(500, "failed")).when(f.play).startInBackground(any(), any());
+            f.heartbeat();
+            for (int i = 0; i < 5; i++) { f.runNext(); }
+            f.awaitHook = () -> {
+                f.awaitHook = () -> {};
+                f.task.cancel(f.saved.get());
+            };
+            f.runNext();
+            assertEquals(Arrays.asList(false, true, false), f.changes);
+            f.runNext(); // 已取消时不能补发开启。
+            assertEquals(3, f.changes.size());
+            StreamProxy replacement = proxy(2, "rtsp://replacement");
+            f.saved.set(replacement);
+            f.task.resume(replacement);
+            f.runNext();
+            assertEquals(Arrays.asList(false, true, false, true), f.changes);
+        }
+    }
+
+    @Test
+    void initialEnableUsesFreshConverterUrl() {
+        try (Fixture f = new Fixture()) {
+            f.enableHook = () -> f.converterUrl = "rtsp://after-enable";
+            f.heartbeat();
+            f.runNext();
+            assertEquals("rtsp://after-enable", f.saved.get().getSrcUrl());
+            verify(f.play).startInBackground(same(f.saved.get()), any());
+        }
+    }
+
+    @Test
+    void fifthFailureRestartUpdatesProxyAndReplacesMediaProxyBeforePull() {
+        try (Fixture f = new Fixture()) {
+            f.heartbeat();
+            f.runNext();
+            f.saved.get().setMediaServerId("old-node");
+            f.saved.get().setStreamKey("old-proxy");
+            f.saved.get().setPulling(true);
+            doThrow(new ControllerException(500, "failed")).when(f.play).startInBackground(any(), any());
+            for (int i = 0; i < 5; i++) { f.runNext(); }
+            f.enableHook = () -> f.converterUrl = "rtsp://new-after-restart";
+            clearInvocations(f.play, f.service);
+            f.runNext();
+            assertEquals("rtsp://new-after-restart", f.saved.get().getSrcUrl());
+            assertNull(f.saved.get().getMediaServerId());
+            assertNull(f.saved.get().getStreamKey());
+            assertEquals(Boolean.FALSE, f.saved.get().getPulling());
+            org.mockito.InOrder order = inOrder(f.play, f.service);
+            order.verify(f.play).stopProxy(same(f.saved.get()));
+            order.verify(f.service).update(same(f.saved.get()));
+            order.verify(f.play).startInBackground(same(f.saved.get()), any());
+        }
+    }
+
+    @Test
+    void failedProxyRefreshRetriesRefreshWithoutRestartingConverterAgain() {
+        try (Fixture f = new Fixture()) {
+            f.heartbeat();
+            f.runNext();
+            doThrow(new ControllerException(500, "failed")).when(f.play).startInBackground(any(), any());
+            for (int i = 0; i < 5; i++) { f.runNext(); }
+            f.enableHook = () -> f.converterUrl = "rtsp://new-after-restart";
+            when(f.service.update(any())).thenThrow(new ControllerException(500, "update failed")).thenReturn(true);
+            f.runNext();
+            assertEquals(Arrays.asList(false, true, false, true), f.changes);
+            f.runNext();
+            assertEquals(Arrays.asList(false, true, false, true), f.changes);
+            assertEquals("rtsp://new-after-restart", f.saved.get().getSrcUrl());
+            verify(f.service, times(2)).update(any());
+            verify(f.play, times(7)).startInBackground(any(), any());
+        }
+    }
+
+    @Test
     void persistenceFailureDoesNotRestartPreparedConverter() {
         for (boolean existing : new boolean[]{false, true}) {
             try (Fixture f = new Fixture()) {
@@ -162,7 +413,7 @@ class StreamProxyLifecycleTest {
                 f.runNext();
                 f.runNext();
                 assertEquals(Arrays.asList(false, true), f.changes);
-                assertEquals(1, f.lookups.get());
+                assertEquals(3, f.lookups.get());
                 verify(f.play).startInBackground(any(), any());
             }
         }
@@ -247,7 +498,7 @@ class StreamProxyLifecycleTest {
             f.heartbeat();
             assertEquals(1, f.pending.size()); // 不并行启动第二个任务。
             f.runNext();
-            assertEquals(2, f.lookups.get());
+            assertEquals(3, f.lookups.get());
             assertEquals(Arrays.asList(false, true), f.changes);
         }
     }
@@ -263,7 +514,7 @@ class StreamProxyLifecycleTest {
             f.heartbeat();
             f.runNext();
             verify(f.service).add(any());
-            assertEquals(2, f.lookups.get());
+            assertEquals(3, f.lookups.get());
         }
     }
 
@@ -279,11 +530,11 @@ class StreamProxyLifecycleTest {
             f.now.set(TimeUnit.SECONDS.toNanos(6));
             f.heartbeat();
             assertTrue(f.pending.isEmpty());
-            assertEquals(1, f.lookups.get());
+            assertEquals(2, f.lookups.get());
             callback.get().run(0, "done", null);
             assertEquals(1, f.pending.size());
             f.runNext();
-            assertEquals(2, f.lookups.get());
+            assertEquals(3, f.lookups.get());
         }
     }
 
@@ -306,7 +557,7 @@ class StreamProxyLifecycleTest {
             }
             f.runNext();
             verify(f.play, times(2)).startInBackground(same(original), any());
-            assertEquals(1, f.lookups.get());
+            assertEquals(2, f.lookups.get());
         }
     }
 
@@ -323,7 +574,7 @@ class StreamProxyLifecycleTest {
             f.runNext();
             verify(f.play).startInBackground(same(replacement), any());
             assertEquals("rtsp://custom/new", replacement.getSrcUrl());
-            assertEquals(1, f.lookups.get());
+            assertEquals(2, f.lookups.get());
             verify(f.service, never()).update(any());
         }
     }
