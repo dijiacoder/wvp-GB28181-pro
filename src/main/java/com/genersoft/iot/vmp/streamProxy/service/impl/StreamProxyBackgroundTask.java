@@ -1,212 +1,238 @@
 package com.genersoft.iot.vmp.streamProxy.service.impl;
 
+import com.alibaba.fastjson2.JSONObject;
 import com.genersoft.iot.vmp.conf.UserSetting;
+import com.genersoft.iot.vmp.mqtt.UavHeartbeatEvent;
 import com.genersoft.iot.vmp.mqtt.UavOnlineStatusService;
 import com.genersoft.iot.vmp.streamProxy.bean.StreamProxy;
 import com.genersoft.iot.vmp.streamProxy.dao.StreamProxyMapper;
 import com.genersoft.iot.vmp.streamProxy.service.IStreamProxyPlayService;
+import com.genersoft.iot.vmp.streamProxy.service.IStreamProxyService;
+import com.genersoft.iot.vmp.conf.exception.ControllerException;
+import com.genersoft.iot.vmp.vmanager.bean.ErrorCode;
+import com.genersoft.iot.vmp.utils.SikongApiUtils;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.util.ObjectUtils;
 import org.springframework.context.event.EventListener;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.PreDestroy;
-import java.time.Clock;
-import java.util.HashSet;
+import java.io.IOException;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.*;
 
-/** 每路一个独立任务，完成后延迟 timeout + 1 秒再检查；线程由调度池复用。 */
+/** MQTT 驱动，每个 SN 在一次在线会话中只持有一个异步任务。 */
 @Slf4j
 @Component
 public class StreamProxyBackgroundTask {
+    @Autowired
+    @Lazy
+    private IStreamProxyService streamProxyService;
+
     private final StreamProxyMapper mapper;
     private final IStreamProxyPlayService playService;
     private final UserSetting settings;
     private final UavOnlineStatusService onlineStatus;
-    private final Clock clock;
     private final ScheduledExecutorService workers;
     private final Map<String, PullTask> tasks = new ConcurrentHashMap<>();
-    private volatile long startAt = Long.MAX_VALUE;
-    private volatile boolean ready;
     private volatile boolean stopping;
+    @Value("${sikong.base-url:}") private String baseUrl;
+    @Value("${sikong.username:}") private String username;
+    @Value("${sikong.password:}") private String password;
+    @Value("${sikong.organization-key:}") private String organizationKey;
 
     @Autowired
     public StreamProxyBackgroundTask(StreamProxyMapper mapper, IStreamProxyPlayService playService,
                                      UserSetting settings, UavOnlineStatusService onlineStatus) {
-        this(mapper, playService, settings, Clock.systemUTC(), createWorkers(), onlineStatus);
+        this(mapper, playService, settings, onlineStatus, new ScheduledThreadPoolExecutor(16));
     }
 
     StreamProxyBackgroundTask(StreamProxyMapper mapper, IStreamProxyPlayService playService,
-                              UserSetting settings, Clock clock, ScheduledExecutorService workers,
-                              UavOnlineStatusService onlineStatus) {
+                              UserSetting settings, UavOnlineStatusService onlineStatus,
+                              ScheduledExecutorService workers) {
+        this.workers = workers;
         this.mapper = mapper;
         this.playService = playService;
         this.settings = settings;
         this.onlineStatus = onlineStatus;
-        this.clock = clock;
-        this.workers = workers;
-    }
-
-    private static ScheduledExecutorService createWorkers() {
-        AtomicInteger number = new AtomicInteger();
-        ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(100, task -> {
-            Thread thread = new Thread(task, "stream-proxy-background-" + number.incrementAndGet());
-            thread.setDaemon(true);
-            return thread;
-        });
-        executor.setRemoveOnCancelPolicy(true);
-        executor.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
-        return executor;
-    }
-
-    @EventListener(ApplicationReadyEvent.class)
-    public synchronized void ready() {
-        if (!ready) {
-            startAt = clock.millis() + 10000L;
-            ready = true;
-            log.info("[后台拉流] 应用启动完成，10秒后开始自动拉流");
+        if (workers instanceof ScheduledThreadPoolExecutor) {
+            ((ScheduledThreadPoolExecutor) workers).setRemoveOnCancelPolicy(true);
+            ((ScheduledThreadPoolExecutor) workers).setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
         }
     }
 
-    /** 仅同步配置；网络检查分别由每路任务执行，不在扫描中争抢拉流名额。 */
-    @Scheduled(fixedDelay = 1000)
-    public synchronized void check() {
-        if (!ready || stopping || clock.millis() < startAt) {
+    @EventListener
+    public void onHeartbeat(UavHeartbeatEvent event) {
+        if (stopping || tasks.containsKey(event.getSn())) {
             return;
         }
-        Set<String> configured = new HashSet<>();
-        for (StreamProxy proxy : mapper.selectAll(null, null, null)) {
-            if (!eligible(proxy)) {
-                continue;
-            }
-            String key = proxy.getApp() + "/" + proxy.getStream();
-            configured.add(key);
-            PullTask existing = tasks.get(key);
-            if (existing != null && existing.id == proxy.getId()) {
-                continue; // 等待重试或正在执行都复用同一任务。
-            }
-            if (existing != null) {
-                existing.cancel();
-            }
-            PullTask task = new PullTask(key, proxy.getId());
-            tasks.put(key, task);
+        PullTask task = new PullTask(event.getSn());
+        // containsKey 仅是高频心跳的快速路径，原子注册保证并发首次上报也只启动一次。
+        if (tasks.putIfAbsent(event.getSn(), task) == null) {
             task.schedule(0);
         }
-        tasks.forEach((key, task) -> {
-            if (!configured.contains(key) && tasks.remove(key, task)) {
-                task.cancel();
-            }
-        });
     }
 
-    /** 立即撤销该配置对应的定时任务；旧任务的迟到回调不能重新调度。 */
     public synchronized void cancel(StreamProxy proxy) {
-        String key = proxy.getApp() + "/" + proxy.getStream();
-        PullTask task = tasks.get(key);
-        if (task != null && task.id == proxy.getId() && tasks.remove(key, task)) {
-            task.cancel();
+        if (!"drone".equals(proxy.getApp())) {
+            return;
+        }
+        PullTask task = tasks.get(proxy.getStream());
+        if (task != null) {
+            // 保留会话占位，避免下一条心跳立即重建被手动删除/停用的代理。
+            task.disabled = true;
         }
     }
 
-    private boolean eligible(StreamProxy proxy) {
-        return proxy.isEnable()
-                && (proxy.getServerId() == null || Objects.equals(settings.getServerId(), proxy.getServerId()));
+    SikongApiUtils client() throws IOException {
+        return new SikongApiUtils(baseUrl, username, password, organizationKey);
+    }
+
+    JSONObject getConverter(SikongApiUtils api, String sn) throws IOException {
+        return api.getLiveStreamConverter(sn);
+    }
+
+    void setEnabled(SikongApiUtils api, String uuid, boolean enable) throws IOException {
+        api.setLiveStreamConverterEnabled(uuid, enable);
     }
 
     private class PullTask implements Runnable {
-        private final String key;
-        private final int id;
-        private ScheduledFuture<?> future;
-        private boolean cancelled;
-        private boolean running;
+        private final String sn;
+        private StreamProxy proxy;
+        private boolean initialized;
+        private volatile boolean disabled;
 
-        private PullTask(String key, int id) {
-            this.key = key;
-            this.id = id;
-        }
+        PullTask(String sn) { this.sn = sn; }
 
-        private synchronized void schedule(long delaySeconds) {
-            if (!cancelled && !stopping && tasks.get(key) == this) {
-                running = false;
-                future = workers.schedule(this, delaySeconds, TimeUnit.SECONDS);
+        void schedule(long seconds) {
+            if (stopping) {
+                tasks.remove(sn, this);
+                return;
+            }
+            if (tasks.get(sn) != this) {
+                return;
+            }
+            try {
+                workers.schedule(this, seconds, TimeUnit.SECONDS);
+            } catch (RejectedExecutionException ex) {
+                tasks.remove(sn, this);
+                if (!stopping) {
+                    throw ex;
+                }
             }
         }
 
-        private synchronized void cancel() {
-            cancelled = true;
-            if (future != null) {
-                future.cancel(false);
-            }
+        boolean online() {
+            return !stopping && tasks.get(sn) == this && onlineStatus.isOnline(sn);
         }
 
         @Override
         public void run() {
-            synchronized (this) {
-                if (cancelled || stopping || running || tasks.get(key) != this) {
-                    return;
-                }
-                running = true;
-            }
-            long interval = 16L;
-            String srcUrl = null;
-            // 必须同时等到接口调用返回及收流结果完成，才安排下一轮。
-            CompletableFuture<Void> submitted = new CompletableFuture<>();
-            CompletableFuture<Long> completed = new CompletableFuture<>();
-            submitted.thenCombine(completed, (returned, delay) -> delay).thenAccept(this::schedule);
+            long delay = 2;
+            boolean submitted = false;
             try {
-                StreamProxy proxy = mapper.select(id);
-                if (proxy != null) {
-                    srcUrl = proxy.getSrcUrl();
-                }
-                if (proxy == null || !eligible(proxy)
-                        || !Objects.equals(key, proxy.getApp() + "/" + proxy.getStream())) {
-                    tasks.remove(key, this);
-                    cancel();
+                if (!online()) {
+                    tasks.remove(sn, this);
                     return;
                 }
-                interval = (proxy.getTimeout() > 0 ? (long) proxy.getTimeout() : 15L) + 1L;
-                final long delay = interval;
-                playService.startInBackground(proxy, (code, msg, info) -> completed.complete(delay));
-            } catch (Exception ex) {
-                boolean isOnline = true;
-                if (key.startsWith("drone/")) {
-                    String uavSN = key.substring("drone/".length());
-                    try {
-                        isOnline = onlineStatus.isOnline(uavSN);
-                        if (!isOnline) {
-                            log.info("[后台拉流] 无人机不在线，拉流失败，uavSN：{}", uavSN);
-                        }
-                    } catch (Exception statusException) {
-                        log.warn("[后台拉流] 查询无人机在线状态失败，uavSN：{}", uavSN, statusException);
+                if (disabled) {
+                    return;
+                }
+                if (!initialized) {
+                    SikongApiUtils api = client();
+                    JSONObject converter = getConverter(api, sn);
+                    if (converter == null) {
+                        log.warn("[MQTT拉流] 未找到 RTSP 转换器，SN={}", sn);
+                        disabled = true;
+                        return;
                     }
+                    String uuid = converter.getString("uuid");
+                    if (!online()) { return; }
+                    if (Boolean.TRUE.equals(converter.getBoolean("enable"))) {
+                        setEnabled(api, uuid, false);
+                        Thread.sleep(1000L);
+                        if (!online()) { return; }
+                        setEnabled(api, uuid, true);
+                    } else if (Boolean.FALSE.equals(converter.getBoolean("enable"))) {
+                        setEnabled(api, uuid, true);
+                    }
+                    Thread.sleep(1000L);
+                    if (!online()) { return; }
+                    JSONObject option = converter.getJSONObject("schema_option");
+                    String url = option == null ? null : option.getString("rtsp_url");
+                    if (url == null || url.trim().isEmpty()) {
+                        throw new IOException("转换器缺少 schema_option.rtsp_url");
+                    }
+                    proxy = streamProxyService.getStreamProxyByAppAndStream("drone", sn);
+                    if (proxy == null) {
+                        proxy = new StreamProxy();
+                        proxy.setApp("drone");
+                        proxy.setStream(sn);
+                        proxy.setType("default");
+                        proxy.setTimeout(15);
+                        proxy.setRtspType("0");
+                        proxy.setEnable(true);
+                        proxy.setServerId(settings.getServerId());
+                        proxy.setSrcUrl(url);
+                        streamProxyService.add(proxy);
+                    } else if (eligible(proxy)) {
+                        proxy.setSrcUrl(url);
+                        if (proxy.getId() == 0) {
+                            throw new ControllerException(ErrorCode.ERROR400.getCode(), "缺少代理信息的ID");
+                        }
+                        if (ObjectUtils.isEmpty(proxy.getRelatesMediaServerId())) {
+                            proxy.setRelatesMediaServerId(null);
+                        }
+                        if (ObjectUtils.isEmpty(proxy.getGbId())) {
+                            proxy.setGbDeviceId(null);
+                        }
+                        streamProxyService.update(proxy);
+                    } else {
+                        disabled = true;
+                        return;
+                    }
+                    initialized = true;
                 }
-                if (isOnline) {
-                    log.error("[后台拉流] 无人机在线，拉流失败，app/stream：{}，拉流地址：{}，异常类型：{}，原因：{}",
-                            key, srcUrl, ex.getClass().getName(), ex.getMessage(), ex);
+                StreamProxy current = mapper.select(proxy.getId());
+                if (current == null || !eligible(current)) {
+                    disabled = true;
+                    return;
                 }
-                // 配置查询也可能失败，此时同样保留任务，稍后重试。
-                completed.complete(interval);
+                delay = (current.getTimeout() > 0 ? current.getTimeout() : 15L) + 1;
+                if (!online()) { return; }
+                final long retryDelay = delay;
+                CompletableFuture<Void> returned = new CompletableFuture<>();
+                CompletableFuture<Void> completed = new CompletableFuture<>();
+                returned.thenCombine(completed, (a, b) -> null).thenRun(() -> schedule(retryDelay));
+                try {
+                    playService.startInBackground(current, (code, msg, info) -> completed.complete(null));
+                } catch (Exception ex) {
+                    completed.complete(null);
+                    throw ex;
+                } finally {
+                    submitted = true;
+                    returned.complete(null);
+                }
+            } catch (Exception ex) {
+                log.warn("[MQTT拉流] 任务失败，在线时将重试，SN={}，异常类型={}", sn, ex.getClass().getSimpleName());
             } finally {
-                submitted.complete(null);
+                if (!submitted) { schedule(delay); }
             }
         }
+    }
+
+    private boolean eligible(StreamProxy proxy) {
+        return proxy.isEnable() && (proxy.getServerId() == null
+                || Objects.equals(settings.getServerId(), proxy.getServerId()));
     }
 
     @PreDestroy
     public synchronized void shutdown() {
         stopping = true;
-        tasks.values().forEach(PullTask::cancel);
         tasks.clear();
         workers.shutdownNow();
     }

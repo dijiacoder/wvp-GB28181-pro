@@ -4,6 +4,8 @@ import com.alibaba.fastjson2.JSONObject;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.concurrent.TimeUnit;
 
@@ -17,6 +19,9 @@ public class UavOnlineStatusService {
         this.redisTemplate = redisTemplate;
     }
 
+    @Autowired
+    private ApplicationEventPublisher events;
+
     public void handleMessage(String topic, String payload) {
         String[] parts = topic.split("/", -1);
         if (parts.length != 4 || !"thing".equals(parts[0]) || !"product".equals(parts[1])
@@ -28,9 +33,11 @@ public class UavOnlineStatusService {
             JSONObject json = JSONObject.parseObject(payload);
             JSONObject data = json == null ? null : json.getJSONObject("data");
             Integer modeCode = data == null ? null : data.getInteger("mode_code");
-            if (modeCode != null && modeCode > 2) {
+            if (modeCode != null && modeCode >= 0) {
                 redisTemplate.opsForValue().set(uavSN, modeCode, 2, TimeUnit.SECONDS);
-//                log.info("{},{}", uavSN, modeCode);
+                if (events != null) {
+                    events.publishEvent(new UavHeartbeatEvent(uavSN));
+                }
             }
         } catch (Exception e) {
             // 单条坏消息或 Redis 故障不能使 MQTT 回调抛出异常而断开连接。

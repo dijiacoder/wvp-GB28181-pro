@@ -10,5 +10,12 @@ mqtt:
   url: ${MQTT_URL:tcp://172.16.5.20:1883}
   username: ${MQTT_USERNAME:admin}
   password: ${MQTT_PASSWORD:Cykj@12345+}
-  # + 匹配单层产品 ID，例如 thing/product/device001/state
-  topic: ${MQTT_TOPIC:thing/product/+/state}
+  # + 匹配单层产品 ID，例如 thing/product/device001/osd
+  topic: ${MQTT_TOPIC:thing/product/+/osd}
+
+# MQTT 上线后使用司空 RTSP 转换器；凭据通过环境变量提供。
+sikong:
+  base-url: ${SIKONG_BASE_URL:}
+  username: ${SIKONG_USERNAME:}
+  password: ${SIKONG_PASSWORD:}
+  organization-key: ${SIKONG_ORGANIZATION_KEY:}

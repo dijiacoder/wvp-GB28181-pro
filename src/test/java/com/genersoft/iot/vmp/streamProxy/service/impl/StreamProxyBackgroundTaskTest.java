@@ -1,232 +1,165 @@
 package com.genersoft.iot.vmp.streamProxy.service.impl;
 
-import com.genersoft.iot.vmp.common.StreamInfo;
 import com.genersoft.iot.vmp.conf.UserSetting;
+import com.genersoft.iot.vmp.mqtt.UavHeartbeatEvent;
 import com.genersoft.iot.vmp.mqtt.UavOnlineStatusService;
-import com.genersoft.iot.vmp.service.bean.ErrorCallback;
-import com.genersoft.iot.vmp.streamProxy.bean.StreamProxy;
 import com.genersoft.iot.vmp.streamProxy.dao.StreamProxyMapper;
 import com.genersoft.iot.vmp.streamProxy.service.IStreamProxyPlayService;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-
-import java.time.Clock;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
+import java.io.IOException;
+import java.util.concurrent.*;
 import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.*;
 
 class StreamProxyBackgroundTaskTest {
-    private final StreamProxyMapper mapper = mock(StreamProxyMapper.class);
-    private final IStreamProxyPlayService play = mock(IStreamProxyPlayService.class);
-    private final UserSetting settings = mock(UserSetting.class);
-    private final Clock clock = mock(Clock.class);
-    private final ScheduledExecutorService workers = mock(ScheduledExecutorService.class);
-    private final ScheduledFuture<?> future = mock(ScheduledFuture.class);
-    private final UavOnlineStatusService onlineStatus = mock(UavOnlineStatusService.class);
-    private final StreamProxyBackgroundTask task = new StreamProxyBackgroundTask(mapper, play, settings, clock, workers, onlineStatus);
-    private StreamProxy proxy;
-
-    @BeforeEach
-    void setup() {
-        when(settings.getServerId()).thenReturn("wvp");
-        doReturn(future).when(workers).schedule(any(Runnable.class), anyLong(), eq(TimeUnit.SECONDS));
-        proxy = proxy(1);
-        when(mapper.selectAll(null, null, null)).thenReturn(Collections.singletonList(proxy));
-    }
-
     @Test
-    void waitsTenSecondsAndReusesTaskWhilePendingAndWaiting() {
-        task.check();
-        task.ready();
-        when(clock.millis()).thenReturn(9999L);
-        task.check();
-        verifyNoInteractions(mapper, workers, play);
-        when(clock.millis()).thenReturn(10000L);
-        task.check();
-        Runnable pull = scheduled(0, 1).get(0);
-        task.check();
-        verify(workers, times(1)).schedule(any(Runnable.class), anyLong(), any());
-        pull.run();
-        task.check();
-        verify(workers, times(1)).schedule(any(Runnable.class), anyLong(), any());
-        callback().run(0, "ok", null);
-        assertSame(pull, scheduled(11, 1).get(0));
-        task.check();
-        verify(workers, times(2)).schedule(any(Runnable.class), anyLong(), any());
-    }
-
-    @Test
-    void allHundredSourcesGetIndependentTasksEvenWithoutResults() {
-        List<StreamProxy> proxies = new ArrayList<>();
-        for (int id = 1; id <= 100; id++) {
-            proxies.add(proxy(id));
-        }
-        when(mapper.selectAll(null, null, null)).thenReturn(proxies);
-        activate();
-        List<Runnable> pulls = scheduled(0, 100);
-        pulls.forEach(Runnable::run);
-        verify(play, times(100)).startInBackground(any(), any());
-        task.check();
-        verify(workers, times(100)).schedule(any(Runnable.class), anyLong(), any());
-    }
-
-    @Test
-    void disablingCancelsTaskAndLateCallbackCannotRestartIt() {
-        activate();
-        Runnable pull = scheduled(0, 1).get(0);
-        pull.run();
-        proxy.setEnable(false);
-        task.check();
-        verify(future).cancel(false);
-        callback().run(0, "late", null);
-        verify(workers, times(1)).schedule(any(Runnable.class), anyLong(), any());
-        proxy.setEnable(true);
-        task.check();
-        verify(workers, times(2)).schedule(any(Runnable.class), eq(0L), eq(TimeUnit.SECONDS));
-        pull.run();
-        verify(play, times(1)).startInBackground(any(), any());
-    }
-
-    @Test
-    void deletedSourceCancelsPendingTask() {
-        activate();
-        Runnable pull = scheduled(0, 1).get(0);
-        when(mapper.selectAll(null, null, null)).thenReturn(Collections.emptyList());
-        task.check();
-        pull.run();
-        verify(future).cancel(false);
-        verifyNoInteractions(play);
-    }
-
-    @Test
-    void queryFailureKeepsTaskForRetry() {
-        activate();
-        Runnable pull = scheduled(0, 1).get(0);
-        when(mapper.select(1)).thenThrow(new IllegalStateException("db unavailable"));
-        pull.run();
-        assertSame(pull, scheduled(16, 1).get(0));
-    }
-
-    @Test
-    void synchronousCallbackFollowedByExceptionSchedulesOnlyOnce() {
-        activate();
-        doAnswer(call -> {
-            ErrorCallback<StreamInfo> callback = call.getArgument(1);
-            callback.run(1, "failed", null);
-            // 任务尚未返回时不能提前安排下一轮。
-            verify(workers, times(1)).schedule(any(Runnable.class), anyLong(), any());
-            throw new IllegalStateException("failed");
-        }).when(play).startInBackground(any(), any());
-        scheduled(0, 1).get(0).run();
-        scheduled(11, 1);
-        verify(workers, times(2)).schedule(any(Runnable.class), anyLong(), any());
-    }
-
-    @Test
-    void shutdownCancelsTasksAndRejectsLateWork() {
-        activate();
-        Runnable pull = scheduled(0, 1).get(0);
-        task.shutdown();
-        pull.run();
-        task.check();
-        verify(future).cancel(false);
-        verify(workers).shutdownNow();
-        verifyNoInteractions(play);
-    }
-
-    @Test
-    void explicitRemovalCancelsTaskImmediatelyAndLateCallbackCannotSchedule() {
-        activate();
-        Runnable pull = scheduled(0, 1).get(0);
-        pull.run();
-        ErrorCallback<StreamInfo> late = callback();
-        task.cancel(proxy);
-        verify(future).cancel(false);
-        late.run(0, "late", null);
-        verify(workers, times(1)).schedule(any(Runnable.class), anyLong(), any());
-    }
-
-    @Test
-    void failedDronePullChecksFullSerialAndStillRetriesWhenRedisFails() {
-        proxy.setApp("drone");
-        proxy.setStream("1581F5BMD235X0014JPR");
-        doThrow(new IllegalStateException("DESCRIBE:401 Unauthorized"))
-                .when(play).startInBackground(any(), any());
-        when(onlineStatus.isOnline(proxy.getStream())).thenThrow(new IllegalStateException("redis unavailable"));
-        activate();
-        Runnable pull = scheduled(0, 1).get(0);
-        assertDoesNotThrow(pull::run);
-        verify(onlineStatus).isOnline("1581F5BMD235X0014JPR");
-        assertSame(pull, scheduled(11, 1).get(0));
-    }
-
-    @Test
-    void offlineDroneFailureIsErrorWhileOnlineDroneFailureIsWarning() {
-        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
-                org.slf4j.LoggerFactory.getLogger(StreamProxyBackgroundTask.class);
-        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
-                new ch.qos.logback.core.read.ListAppender<>();
-        appender.start();
-        logger.addAppender(appender);
+    void concurrentHeartbeatsRegisterOneTaskPerSerial() throws Exception {
+        ScheduledExecutorService workers = mock(ScheduledExecutorService.class);
+        StreamProxyBackgroundTask task = new StreamProxyBackgroundTask(mock(StreamProxyMapper.class),
+                mock(IStreamProxyPlayService.class), mock(UserSetting.class),
+                mock(UavOnlineStatusService.class), workers);
+        ExecutorService senders = Executors.newFixedThreadPool(16);
+        CountDownLatch start = new CountDownLatch(1);
+        java.util.List<Future<?>> pending = new java.util.ArrayList<>();
         try {
-            proxy.setApp("drone");
-            proxy.setStream("1581F5BMD235X0014JPR");
-            doThrow(new IllegalStateException("DESCRIBE:401 Unauthorized"))
-                    .when(play).startInBackground(any(), any());
-            when(onlineStatus.isOnline(proxy.getStream())).thenReturn(false, true);
-            activate();
-            Runnable pull = scheduled(0, 1).get(0);
-            pull.run();
-            assertTrue(appender.list.stream().anyMatch(event ->
-                    event.getLevel() == ch.qos.logback.classic.Level.ERROR
-                            && event.getFormattedMessage().contains("属于不正常情况")));
-            appender.list.clear();
-            pull.run();
-            assertTrue(appender.list.stream().anyMatch(event ->
-                    event.getLevel() == ch.qos.logback.classic.Level.WARN
-                            && event.getFormattedMessage().contains("[后台拉流] 失败")));
-            scheduled(11, 2);
+            for (int i = 0; i < 1000; i++) {
+                final String sn = "SN-" + (i % 10);
+                pending.add(senders.submit(() -> {
+                    start.await();
+                    task.onHeartbeat(new UavHeartbeatEvent(sn));
+                    return null;
+                }));
+            }
+            start.countDown();
+            for (Future<?> result : pending) { result.get(5, TimeUnit.SECONDS); }
+            verify(workers, times(10)).schedule(any(Runnable.class), eq(0L), eq(TimeUnit.SECONDS));
         } finally {
-            logger.detachAppender(appender);
-            appender.stop();
+            senders.shutdownNow();
+            task.shutdown();
         }
     }
 
-    private void activate() {
-        task.ready();
-        when(clock.millis()).thenReturn(10000L);
-        task.check();
+    @Test
+    void anotherSerialCanRegisterWhileOneSubmissionIsBlocked() throws Exception {
+        ScheduledExecutorService workers = mock(ScheduledExecutorService.class);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicInteger submissions = new java.util.concurrent.atomic.AtomicInteger();
+        doAnswer(call -> {
+            if (submissions.incrementAndGet() == 1) {
+                entered.countDown();
+                if (!release.await(5, TimeUnit.SECONDS)) { throw new AssertionError("submission blocked"); }
+            }
+            return null;
+        }).when(workers).schedule(any(Runnable.class), eq(0L), eq(TimeUnit.SECONDS));
+        StreamProxyBackgroundTask task = new StreamProxyBackgroundTask(mock(StreamProxyMapper.class),
+                mock(IStreamProxyPlayService.class), mock(UserSetting.class),
+                mock(UavOnlineStatusService.class), workers);
+        ExecutorService senders = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> first = senders.submit(() -> task.onHeartbeat(new UavHeartbeatEvent("A")));
+            org.junit.jupiter.api.Assertions.assertTrue(entered.await(5, TimeUnit.SECONDS));
+            senders.submit(() -> task.onHeartbeat(new UavHeartbeatEvent("B"))).get(2, TimeUnit.SECONDS);
+            release.countDown();
+            first.get(5, TimeUnit.SECONDS);
+        } finally {
+            release.countDown();
+            senders.shutdownNow();
+            task.shutdown();
+        }
     }
 
-    private List<Runnable> scheduled(long delay, int count) {
-        ArgumentCaptor<Runnable> capture = ArgumentCaptor.forClass(Runnable.class);
-        verify(workers, times(count)).schedule(capture.capture(), eq(delay), eq(TimeUnit.SECONDS));
-        return capture.getAllValues();
+    @Test
+    void enabledConverterStopsBeforeRestartAndUsesNestedRtspUrl() throws Exception {
+        for (boolean existing : new boolean[]{false, true}) {
+            for (boolean enabled : new boolean[]{false, true}) {
+                StreamProxyMapper mapper = mock(StreamProxyMapper.class);
+                IStreamProxyPlayService play = mock(IStreamProxyPlayService.class);
+                UavOnlineStatusService online = mock(UavOnlineStatusService.class);
+                ScheduledExecutorService workers = mock(ScheduledExecutorService.class);
+                java.util.List<Boolean> changes = new java.util.ArrayList<>();
+                StreamProxyBackgroundTask task = new StreamProxyBackgroundTask(mapper, play,
+                        mock(UserSetting.class), online, workers) {
+                    @Override
+                    com.genersoft.iot.vmp.utils.SikongApiUtils client() { return null; }
+                    @Override
+                    com.alibaba.fastjson2.JSONObject getConverter(
+                            com.genersoft.iot.vmp.utils.SikongApiUtils api, String sn) {
+                        return com.alibaba.fastjson2.JSONObject.parseObject("{\"uuid\":\"id\",\"enable\":"
+                                + enabled + ",\"schema_option\":{\"rtsp_url\":\"rtsp://example/live\"}}");
+                    }
+                    @Override
+                    void setEnabled(com.genersoft.iot.vmp.utils.SikongApiUtils api, String id, boolean value) {
+                        changes.add(value);
+                    }
+                };
+                com.genersoft.iot.vmp.streamProxy.service.IStreamProxyService service =
+                        mock(com.genersoft.iot.vmp.streamProxy.service.IStreamProxyService.class);
+                org.springframework.test.util.ReflectionTestUtils.setField(task, "streamProxyService", service);
+                if (existing) {
+                    com.genersoft.iot.vmp.streamProxy.bean.StreamProxy saved =
+                            new com.genersoft.iot.vmp.streamProxy.bean.StreamProxy();
+                    saved.setId(42);
+                    saved.setApp("drone");
+                    saved.setStream("SN");
+                    saved.setEnable(true);
+                    saved.setRelatesMediaServerId("");
+                    when(service.getStreamProxyByAppAndStream("drone", "SN")).thenReturn(saved);
+                }
+                when(online.isOnline("SN")).thenReturn(true);
+                task.onHeartbeat(new UavHeartbeatEvent("SN"));
+                ArgumentCaptor<Runnable> run = ArgumentCaptor.forClass(Runnable.class);
+                verify(workers).schedule(run.capture(), eq(0L), eq(TimeUnit.SECONDS));
+                run.getValue().run();
+                org.junit.jupiter.api.Assertions.assertEquals(enabled ? java.util.Arrays.asList(false, true)
+                        : java.util.Collections.singletonList(true), changes);
+                ArgumentCaptor<com.genersoft.iot.vmp.streamProxy.bean.StreamProxy> proxy =
+                        ArgumentCaptor.forClass(com.genersoft.iot.vmp.streamProxy.bean.StreamProxy.class);
+                verify(service).getStreamProxyByAppAndStream("drone", "SN");
+                verify(mapper, never()).selectOneByAppAndStream(anyString(), anyString());
+                if (existing) {
+                    verify(service).update(proxy.capture());
+                    verify(mapper, never()).update(any());
+                    verify(mapper, never()).add(any());
+                    org.junit.jupiter.api.Assertions.assertNull(proxy.getValue().getRelatesMediaServerId());
+                } else {
+                    verify(service).add(proxy.capture());
+                    verify(mapper, never()).add(any());
+                    verify(service, never()).update(any());
+                }
+                org.junit.jupiter.api.Assertions.assertEquals("rtsp://example/live", proxy.getValue().getSrcUrl());
+                task.shutdown();
+            }
+        }
     }
 
-    @SuppressWarnings("unchecked")
-    private ErrorCallback<StreamInfo> callback() {
-        ArgumentCaptor<ErrorCallback<StreamInfo>> capture = ArgumentCaptor.forClass(ErrorCallback.class);
-        verify(play).startInBackground(eq(proxy), capture.capture());
-        return capture.getValue();
-    }
-
-    private StreamProxy proxy(int id) {
-        StreamProxy proxy = new StreamProxy();
-        proxy.setId(id);
-        proxy.setApp("live");
-        proxy.setStream("drone-" + id);
-        proxy.setTimeout(10);
-        proxy.setEnable(true);
-        when(mapper.select(id)).thenReturn(proxy);
-        return proxy;
+    @Test
+    void deduplicatesHeartbeatsAndStopsRetryingWhenOffline() {
+        StreamProxyMapper mapper = mock(StreamProxyMapper.class);
+        IStreamProxyPlayService play = mock(IStreamProxyPlayService.class);
+        UavOnlineStatusService online = mock(UavOnlineStatusService.class);
+        ScheduledExecutorService workers = mock(ScheduledExecutorService.class);
+        StreamProxyBackgroundTask task = new StreamProxyBackgroundTask(mapper, play,
+                mock(UserSetting.class), online, workers) {
+            @Override
+            com.genersoft.iot.vmp.utils.SikongApiUtils client() throws IOException {
+                throw new IOException("temporary failure");
+            }
+        };
+        when(online.isOnline("SN")).thenReturn(true);
+        task.onHeartbeat(new UavHeartbeatEvent("SN"));
+        task.onHeartbeat(new UavHeartbeatEvent("SN"));
+        ArgumentCaptor<Runnable> run = ArgumentCaptor.forClass(Runnable.class);
+        verify(workers).schedule(run.capture(), eq(0L), eq(TimeUnit.SECONDS));
+        run.getValue().run();
+        verify(workers).schedule(any(Runnable.class), eq(2L), eq(TimeUnit.SECONDS));
+        when(online.isOnline("SN")).thenReturn(false);
+        run.getValue().run();
+        verify(workers, times(2)).schedule(any(Runnable.class), anyLong(), any());
+        task.onHeartbeat(new UavHeartbeatEvent("SN"));
+        verify(workers, times(2)).schedule(any(Runnable.class), eq(0L), eq(TimeUnit.SECONDS));
+        verifyNoInteractions(mapper, play);
+        task.shutdown();
     }
 }

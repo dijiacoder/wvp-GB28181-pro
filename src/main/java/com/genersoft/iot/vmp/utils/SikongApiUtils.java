@@ -44,7 +44,6 @@ public final class SikongApiUtils {
         }
         this.organizationKey = organizationKey;
         this.xAuthToken = getXAuthToken(username, password);
-        log.info(this.xAuthToken);
     }
 
     /**
@@ -140,9 +139,7 @@ public final class SikongApiUtils {
                 .header("x-request-id", requestId)
                 .contentType("application/json; charset=utf-8")
                 .setConnectionTimeout(10000).setReadTimeout(30000).setFollowRedirects(false);
-        System.out.println(request.toString());
         try (HttpResponse response = request.execute()) {
-            System.out.println(response.toString());
             // 不把响应正文写入异常，避免暴露 RTSP 密码等敏感信息。
             if (response.getStatus() < 200 || response.getStatus() >= 300) {
                 throw new IOException("司空接口 HTTP " + response.getStatus() + ", requestId=" + requestId);
@@ -170,7 +167,9 @@ public final class SikongApiUtils {
         }
     }
 
-    /** 按转发器 uuid 开启或关闭直播同步，返回完整接口响应。 */
+    /**
+     * 按转发器 uuid 开启或关闭直播同步，返回完整接口响应。
+     */
     public JSONObject setLiveStreamConverterEnabled(String uuid, boolean enable) throws IOException {
         if (uuid == null || uuid.trim().isEmpty()) {
             throw new IllegalArgumentException("uuid 不能为空");
@@ -187,7 +186,6 @@ public final class SikongApiUtils {
                 .contentType("application/json; charset=utf-8")
                 .body(body.toJSONString())
                 .setConnectionTimeout(10000).setReadTimeout(30000).setFollowRedirects(false);
-        System.out.println(request.toString());
         try (HttpResponse response = request.execute()) {
             if (response.getStatus() < 200 || response.getStatus() >= 300) {
                 throw new IOException("司空接口 HTTP " + response.getStatus() + ", requestId=" + requestId);
@@ -226,7 +224,7 @@ public final class SikongApiUtils {
         }
         for (int i = 0; i < list.size(); i++) {
             JSONObject converter = list.getJSONObject(i);
-            if (converter != null && querySn.equals(converter.getString("sn"))) {
+            if (converter != null && querySn.equals(converter.getString("sn")) && "rtsp".equals(converter.getString("schema"))) {
                 return converter;
             }
         }

@@ -16,7 +16,7 @@ class UavOnlineStatusServiceTest {
     private final ValueOperations<Object, Object> values = mock(ValueOperations.class);
     private final UavOnlineStatusService service = new UavOnlineStatusService(redis);
     private final String sn = "1581F5BMD235X0014JPR";
-    private final String topic = "thing/product/" + sn + "/state";
+    private final String topic = "thing/product/" + sn + "/osd";
 
     @Test
     void everyQualifyingMessageRefreshesTwoSecondTtlOnFullSerial() {
@@ -28,11 +28,11 @@ class UavOnlineStatusServiceTest {
     }
 
     @Test
-    void ignoresMissingModeLowModeAndUnrelatedTopicsAndSurvivesMalformedJson() {
-        service.handleMessage(topic, "{\"data\":{\"mode_code\":2}}");
+    void ignoresMissingModeInvalidModeAndUnrelatedTopicsAndSurvivesMalformedJson() {
+        service.handleMessage(topic, "{\"data\":{\"mode_code\":-1}}");
         service.handleMessage(topic, "{\"data\":{}}");
         service.handleMessage(topic, "{}");
-        service.handleMessage("thing/product/other/state", "{\"data\":{\"mode_code\":3}}");
+        service.handleMessage("thing/product/other/osd", "{\"data\":{\"mode_code\":3}}");
         assertDoesNotThrow(() -> service.handleMessage(topic, "bad json"));
         verifyNoInteractions(redis);
     }
