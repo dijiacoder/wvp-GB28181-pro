@@ -40,9 +40,7 @@ class StreamProxyApiAuthenticationTest {
     }
 
     @Test
-    void endpointsRequireAuthenticationAndReturnUnifiedResult() throws Exception {
-        Object originalKey = org.springframework.test.util.ReflectionTestUtils.getField(JwtUtils.class, "rsaJsonWebKey");
-        Object originalUserService = org.springframework.test.util.ReflectionTestUtils.getField(JwtUtils.class, "userService");
+    void getStreamProxyAllowsAnonymousAccessAndReturnsUnifiedResult() throws Exception {
         try (AnnotationConfigWebApplicationContext context = new AnnotationConfigWebApplicationContext()) {
             context.setServletContext(new MockServletContext());
             context.register(Config.class);
@@ -57,35 +55,19 @@ class StreamProxyApiAuthenticationTest {
             summary.setPulling(1);
             summary.setEnable(1);
             when(service.getStreamProxy("SN")).thenReturn(summary);
-            mvc.perform(get("/api/proxy/getStreamProxy").param("stream", "SN"))
-                    .andExpect(status().isUnauthorized());
-            verifyNoInteractions(service);
-            org.springframework.test.util.ReflectionTestUtils.setField(JwtUtils.class, "rsaJsonWebKey",
-                    org.jose4j.jwk.RsaJwkGenerator.generateJwk(2048));
-            com.genersoft.iot.vmp.service.IUserService users = context.getBean(com.genersoft.iot.vmp.service.IUserService.class);
-            com.genersoft.iot.vmp.storager.dao.dto.User user = new com.genersoft.iot.vmp.storager.dao.dto.User();
-            user.setId(1);
-            user.setPassword("test");
-            com.genersoft.iot.vmp.storager.dao.dto.Role role = new com.genersoft.iot.vmp.storager.dao.dto.Role();
-            role.setId(1);
-            user.setRole(role);
-            when(users.getUserByUsername("test")).thenReturn(user);
-            org.springframework.test.util.ReflectionTestUtils.setField(JwtUtils.class, "userService", users);
-            String token = JwtUtils.createToken("test", 30L);
             String json = "{\"app\":\"drone\",\"stream\":\"SN\",\"out_url\":\"rtmp://172.16.5.102:1935/drone/SN\",\"pulling\":1,\"enable\":1}";
-            mvc.perform(get("/api/proxy/getStreamProxy").param("stream", "SN").header(JwtUtils.getHeader(), token))
+            mvc.perform(get("/api/proxy/getStreamProxy").param("stream", "SN"))
                     .andExpect(status().isOk()).andExpect(content().json("{\"code\":0,\"msg\":\"成功\",\"data\":" + json + "}", true));
             mvc.perform(get("/api/proxy/getStreamProxy").param("stream", "SN")
                     .header(JwtUtils.getHeader(), "invalid-token"))
-                    .andExpect(status().isUnauthorized());
-            mvc.perform(get("/api/proxy/getStreamProxy").param("stream", "missing").header(JwtUtils.getHeader(), token))
+                    .andExpect(status().isOk()).andExpect(content().json("{\"code\":0,\"msg\":\"成功\",\"data\":" + json + "}", true));
+            mvc.perform(get("/api/proxy/getStreamProxy").param("stream", "SN").header(JwtUtils.getApiKeyHeader(), "invalid-key"))
+                    .andExpect(status().isOk());
+            mvc.perform(get("/api/proxy/getStreamProxy").param("stream", "missing"))
                     .andExpect(status().isOk())
                     .andExpect(content().json("{\"code\":404,\"msg\":\"资源未找到\",\"data\":null}", true));
-            mvc.perform(get("/api/proxy/getStreamProxy").header(JwtUtils.getHeader(), token)).andExpect(status().isBadRequest());
+            mvc.perform(get("/api/proxy/getStreamProxy")).andExpect(status().isBadRequest());
             mvc.perform(get("/api/proxy/list")).andExpect(status().isUnauthorized());
-        } finally {
-            org.springframework.test.util.ReflectionTestUtils.setField(JwtUtils.class, "rsaJsonWebKey", originalKey);
-            org.springframework.test.util.ReflectionTestUtils.setField(JwtUtils.class, "userService", originalUserService);
         }
     }
 }

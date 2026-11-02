@@ -80,7 +80,7 @@ public class StreamProxyController {
         return streamProxyService.getAll(page, count, query, pulling, mediaServerId);
     }
 
-    @Operation(summary = "按stream查询流代理", security = @SecurityRequirement(name = JwtUtils.HEADER))
+    @Operation(summary = "按stream查询流代理（免认证）")
     @GetMapping("/getStreamProxy")
     public WVPResult<StreamProxySummary> getStreamProxy(@RequestParam("stream") String stream) {
         StreamProxySummary proxy = streamProxyService.getStreamProxy(stream);
