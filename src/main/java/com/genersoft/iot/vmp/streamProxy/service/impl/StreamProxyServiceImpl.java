@@ -40,6 +40,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.util.Assert;
 import org.springframework.util.ObjectUtils;
 
+import com.genersoft.iot.vmp.streamProxy.bean.StreamProxySummary;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -254,6 +256,39 @@ public class StreamProxyServiceImpl implements IStreamProxyService {
         return new PageInfo<>(all);
     }
 
+
+    @Override
+    public StreamProxySummary getStreamProxy(String stream) {
+        if (stream == null || stream.trim().isEmpty()) {
+            throw new ControllerException(ErrorCode.ERROR400.getCode(), "stream不能为空");
+        }
+        StreamProxy proxy = streamProxyMapper.getStreamProxyByStream(stream);
+        return proxy == null ? null : toSummary(proxy);
+    }
+
+    private StreamProxySummary toSummary(StreamProxy proxy) {
+        StreamProxySummary result = new StreamProxySummary();
+        result.setApp(proxy.getApp());
+        result.setStream(proxy.getStream());
+        result.setPulling(Boolean.TRUE.equals(proxy.getPulling()) ? 1 : 0);
+        result.setEnable(proxy.isEnable() ? 1 : 0);
+        MediaServer mediaServer = mediaServerService.getOne(proxy.getMediaServerId());
+        if (mediaServer == null && !ObjectUtils.isEmpty(proxy.getRelatesMediaServerId())) {
+            mediaServer = mediaServerService.getOne(proxy.getRelatesMediaServerId());
+        }
+        if (mediaServer == null) {
+            mediaServer = mediaServerService.getDefaultMediaServer();
+        }
+        if (mediaServer != null && mediaServer.getRtmpPort() > 0) {
+            String host = ObjectUtils.isEmpty(mediaServer.getStreamIp()) ? mediaServer.getIp() : mediaServer.getStreamIp();
+            if (!ObjectUtils.isEmpty(host)) {
+                if (host.contains(":") && !host.startsWith("[")) { host = "[" + host + "]"; }
+                result.setOutUrl("rtmp://" + host + ":" + mediaServer.getRtmpPort()
+                        + "/" + proxy.getApp() + "/" + proxy.getStream());
+            }
+        }
+        return result;
+    }
 
     @Override
     public void startByAppAndStream(String app, String stream, ErrorCallback<StreamInfo> callback) {

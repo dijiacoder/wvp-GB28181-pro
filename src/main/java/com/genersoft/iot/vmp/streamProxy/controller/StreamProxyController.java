@@ -32,6 +32,7 @@ import javax.servlet.http.HttpServletRequest;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.Map;
+import com.genersoft.iot.vmp.streamProxy.bean.StreamProxySummary;
 
 @SuppressWarnings("rawtypes")
 /**
@@ -77,6 +78,13 @@ public class StreamProxyController {
             query = null;
         }
         return streamProxyService.getAll(page, count, query, pulling, mediaServerId);
+    }
+
+    @Operation(summary = "按stream查询流代理", security = @SecurityRequirement(name = JwtUtils.HEADER))
+    @GetMapping("/getStreamProxy")
+    public WVPResult<StreamProxySummary> getStreamProxy(@RequestParam("stream") String stream) {
+        StreamProxySummary proxy = streamProxyService.getStreamProxy(stream);
+        return proxy == null ? WVPResult.fail(ErrorCode.ERROR404) : WVPResult.success(proxy);
     }
 
     @Operation(summary = "查询流代理", security = @SecurityRequirement(name = JwtUtils.HEADER))

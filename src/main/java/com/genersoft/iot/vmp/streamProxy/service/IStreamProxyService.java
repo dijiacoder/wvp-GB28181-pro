@@ -9,6 +9,7 @@ import com.genersoft.iot.vmp.vmanager.bean.ResourceBaseInfo;
 import com.github.pagehelper.PageInfo;
 
 import java.util.Map;
+import com.genersoft.iot.vmp.streamProxy.bean.StreamProxySummary;
 
 public interface IStreamProxyService {
 
@@ -93,4 +94,7 @@ public interface IStreamProxyService {
     StreamProxy getStreamProxy(int id);
 
     void delete(int id);
+
+    StreamProxySummary getStreamProxy(String stream);
+
 }

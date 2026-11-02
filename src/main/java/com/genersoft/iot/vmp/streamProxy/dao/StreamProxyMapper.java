@@ -51,6 +51,10 @@ public interface StreamProxyMapper {
     List<StreamProxy> selectForPushingInMediaServer(@Param("mediaServerId")  String mediaServerId, @Param("enable") boolean enable);
 
 
+    // stream 在不同 app 下可能重复，此接口返回最新的一条。
+    @Select("SELECT * FROM wvp_stream_proxy WHERE stream=#{stream} ORDER BY id DESC LIMIT 1")
+    StreamProxy getStreamProxyByStream(@Param("stream") String stream);
+
     @Select("select count(1) from wvp_stream_proxy")
     int getAllCount();
 
