@@ -279,12 +279,18 @@ public class StreamProxyServiceImpl implements IStreamProxyService {
         if (mediaServer == null) {
             mediaServer = mediaServerService.getDefaultMediaServer();
         }
-        if (mediaServer != null && mediaServer.getRtmpPort() > 0) {
+        if (mediaServer != null) {
             String host = ObjectUtils.isEmpty(mediaServer.getStreamIp()) ? mediaServer.getIp() : mediaServer.getStreamIp();
             if (!ObjectUtils.isEmpty(host)) {
                 if (host.contains(":") && !host.startsWith("[")) { host = "[" + host + "]"; }
-                result.setOutUrl("rtmp://" + host + ":" + mediaServer.getRtmpPort()
-                        + "/" + proxy.getApp() + "/" + proxy.getStream());
+                String path = "/" + proxy.getApp() + "/" + proxy.getStream();
+                if (mediaServer.getRtmpPort() > 0) {
+                    result.setRtmpUrl("rtmp://" + host + ":" + mediaServer.getRtmpPort() + path);
+                }
+                int flvPort = mediaServer.getFlvPort() > 0 ? mediaServer.getFlvPort() : mediaServer.getHttpPort();
+                if (flvPort > 0) {
+                    result.setFlvUrl("http://" + host + ":" + flvPort + path + ".live.flv");
+                }
             }
         }
         return result;

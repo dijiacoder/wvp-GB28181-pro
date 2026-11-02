@@ -21,10 +21,12 @@ class StreamProxyPublicQueryTest {
         MediaServer assigned = new MediaServer();
         assigned.setStreamIp("172.16.5.102");
         assigned.setRtmpPort(1935);
+        assigned.setFlvPort(80);
         when(media.getOne("assigned")).thenReturn(assigned);
         MediaServer fallback = new MediaServer();
         fallback.setIp("172.16.5.103");
         fallback.setRtmpPort(1936);
+        fallback.setHttpPort(8080);
         when(media.getDefaultMediaServer()).thenReturn(fallback);
         StreamProxy active = new StreamProxy();
         active.setApp("drone");
@@ -38,15 +40,19 @@ class StreamProxyPublicQueryTest {
         when(mapper.getStreamProxyByStream("SN")).thenReturn(active);
         when(mapper.getStreamProxyByStream("disabled")).thenReturn(disabled);
         StreamProxySummary activeResult = service.getStreamProxy("SN");
-        assertEquals("rtmp://172.16.5.102:1935/drone/SN", activeResult.getOutUrl());
+        assertEquals("rtmp://172.16.5.102:1935/drone/SN", activeResult.getRtmpUrl());
+        assertEquals("http://172.16.5.102:80/drone/SN.live.flv", activeResult.getFlvUrl());
         assertEquals(1, activeResult.getPulling());
         assertEquals(1, activeResult.getEnable());
         StreamProxySummary disabledResult = service.getStreamProxy("disabled");
-        assertEquals("rtmp://172.16.5.103:1936/other/disabled", disabledResult.getOutUrl());
+        assertEquals("rtmp://172.16.5.103:1936/other/disabled", disabledResult.getRtmpUrl());
+        assertEquals("http://172.16.5.103:8080/other/disabled.live.flv", disabledResult.getFlvUrl());
         assertEquals(0, disabledResult.getPulling());
         assertEquals(0, disabledResult.getEnable());
         assertNull(service.getStreamProxy("missing"));
-        verify(mapper).getStreamProxyByStream("SN");
+        assigned.setRtmpPort(0);
+        assertNull(service.getStreamProxy("SN").getRtmpUrl());
+        assertEquals("http://172.16.5.102:80/drone/SN.live.flv", service.getStreamProxy("SN").getFlvUrl());
         verify(mapper, never()).selectAll(any(), any(), any());
     }
 }

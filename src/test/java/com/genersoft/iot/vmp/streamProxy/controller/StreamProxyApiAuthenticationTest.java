@@ -51,11 +51,12 @@ class StreamProxyApiAuthenticationTest {
             StreamProxySummary summary = new StreamProxySummary();
             summary.setApp("drone");
             summary.setStream("SN");
-            summary.setOutUrl("rtmp://172.16.5.102:1935/drone/SN");
+            summary.setRtmpUrl("rtmp://172.16.5.102:1935/drone/SN");
+            summary.setFlvUrl("http://172.16.5.102:80/drone/SN.live.flv");
             summary.setPulling(1);
             summary.setEnable(1);
             when(service.getStreamProxy("SN")).thenReturn(summary);
-            String json = "{\"app\":\"drone\",\"stream\":\"SN\",\"out_url\":\"rtmp://172.16.5.102:1935/drone/SN\",\"pulling\":1,\"enable\":1}";
+            String json = "{\"app\":\"drone\",\"stream\":\"SN\",\"rtmpUrl\":\"rtmp://172.16.5.102:1935/drone/SN\",\"flvUrl\":\"http://172.16.5.102:80/drone/SN.live.flv\",\"pulling\":1,\"enable\":1}";
             mvc.perform(get("/api/proxy/getStreamProxy").param("stream", "SN"))
                     .andExpect(status().isOk()).andExpect(content().json("{\"code\":0,\"msg\":\"成功\",\"data\":" + json + "}", true));
             mvc.perform(get("/api/proxy/getStreamProxy").param("stream", "SN")
