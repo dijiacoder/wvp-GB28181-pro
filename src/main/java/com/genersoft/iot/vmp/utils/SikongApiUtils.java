@@ -21,7 +21,9 @@ import java.security.NoSuchAlgorithmException;
 public final class SikongApiUtils {
     private final String baseUrl;
     private final String organizationKey;
-    private final String xAuthToken;
+    private volatile String xAuthToken;
+    private final String username;
+    private final String password;
 
     public SikongApiUtils(String baseUrl, String username, String password, String organizationKey) throws IOException {
         if (baseUrl == null || baseUrl.trim().isEmpty()) {
@@ -43,6 +45,8 @@ public final class SikongApiUtils {
             throw new IllegalArgumentException("organizationKey 不能为空");
         }
         this.organizationKey = organizationKey;
+        this.username = username;
+        this.password = password;
         this.xAuthToken = getXAuthToken(username, password);
     }
 
@@ -131,6 +135,10 @@ public final class SikongApiUtils {
      * 查询组织下的直播同步列表，默认第 1 页，每页 10 条。
      */
     public JSONObject listLiveStreamConverters() throws IOException {
+        return listLiveStreamConverters(true);
+    }
+
+    private JSONObject listLiveStreamConverters(boolean retryUnauthorized) throws IOException {
         String queryUrl = baseUrl + "manage/api/v1/organizations/"
                 + URLEncoder.encode(organizationKey, "UTF-8") + "/c2c/live-sync/list?page=1&size=1000";
         String requestId = UUID.randomUUID().toString();
@@ -157,6 +165,10 @@ public final class SikongApiUtils {
             if (result == null || !(result.get("code") instanceof Number)) {
                 throw new IOException("司空接口响应缺少有效 code, requestId=" + requestId);
             }
+            if (retryUnauthorized && "200401".equals(result.get("code").toString())) {
+                this.xAuthToken = getXAuthToken(username, password);
+                return listLiveStreamConverters(false);
+            }
             if (!"0".equals(result.get("code").toString())) {
                 throw new IOException("司空接口业务失败, code=" + result.get("code")
                         + ", requestId=" + requestId);
@@ -171,6 +183,10 @@ public final class SikongApiUtils {
      * 按转发器 uuid 开启或关闭直播同步，返回完整接口响应。
      */
     public JSONObject setLiveStreamConverterEnabled(String uuid, boolean enable) throws IOException {
+        return setLiveStreamConverterEnabled(uuid, enable, true);
+    }
+
+    private JSONObject setLiveStreamConverterEnabled(String uuid, boolean enable, boolean retryUnauthorized) throws IOException {
         if (uuid == null || uuid.trim().isEmpty()) {
             throw new IllegalArgumentException("uuid 不能为空");
         }
@@ -198,6 +214,10 @@ public final class SikongApiUtils {
             }
             if (result == null || !(result.get("code") instanceof Number)) {
                 throw new IOException("司空接口响应缺少有效 code, requestId=" + requestId);
+            }
+            if (retryUnauthorized && "200401".equals(result.get("code").toString())) {
+                this.xAuthToken = getXAuthToken(username, password);
+                return setLiveStreamConverterEnabled(uuid, enable, false);
             }
             if (!"0".equals(result.get("code").toString())) {
                 throw new IOException("司空接口业务失败, code=" + result.get("code")
