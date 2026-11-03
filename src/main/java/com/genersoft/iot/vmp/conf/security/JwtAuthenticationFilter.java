@@ -35,7 +35,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI().substring(request.getContextPath().length());
-        return "GET".equals(request.getMethod()) && "/api/proxy/getStreamProxy".equals(path);
+        return "GET".equals(request.getMethod()) && ("/api/proxy/getStreamProxy".equals(path) || "/api/proxy/listStreamProxy".equals(path));
     }
 
     @Override

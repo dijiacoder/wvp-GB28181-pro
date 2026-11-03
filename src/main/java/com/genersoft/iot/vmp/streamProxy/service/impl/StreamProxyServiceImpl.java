@@ -258,6 +258,15 @@ public class StreamProxyServiceImpl implements IStreamProxyService {
 
 
     @Override
+    public List<StreamProxySummary> listStreamProxy() {
+        List<StreamProxySummary> result = new ArrayList<>();
+        for (StreamProxy proxy : streamProxyMapper.listStreamProxy()) {
+            result.add(toSummary(proxy));
+        }
+        return result;
+    }
+
+    @Override
     public StreamProxySummary getStreamProxy(String stream) {
         if (stream == null || stream.trim().isEmpty()) {
             throw new ControllerException(ErrorCode.ERROR400.getCode(), "stream不能为空");

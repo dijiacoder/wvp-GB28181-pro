@@ -68,6 +68,16 @@ class StreamProxyApiAuthenticationTest {
                     .andExpect(status().isOk())
                     .andExpect(content().json("{\"code\":404,\"msg\":\"资源未找到\",\"data\":null}", true));
             mvc.perform(get("/api/proxy/getStreamProxy")).andExpect(status().isBadRequest());
+            when(service.listStreamProxy()).thenReturn(java.util.Collections.singletonList(summary));
+            mvc.perform(get("/api/proxy/listStreamProxy"))
+                    .andExpect(status().isOk())
+                    .andExpect(content().json("{\"code\":0,\"msg\":\"成功\",\"data\":[" + json + "]}", true));
+            mvc.perform(get("/api/proxy/listStreamProxy").header(JwtUtils.getHeader(), "invalid-token"))
+                    .andExpect(status().isOk());
+            when(service.listStreamProxy()).thenReturn(java.util.Collections.emptyList());
+            mvc.perform(get("/api/proxy/listStreamProxy"))
+                    .andExpect(status().isOk())
+                    .andExpect(content().json("{\"code\":0,\"msg\":\"成功\",\"data\":[]}", true));
             mvc.perform(get("/api/proxy/list")).andExpect(status().isUnauthorized());
         }
     }

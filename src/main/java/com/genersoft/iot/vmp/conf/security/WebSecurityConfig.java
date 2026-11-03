@@ -119,7 +119,7 @@ public class WebSecurityConfig extends WebSecurityConfigurerAdapter {
                 .authorizeRequests()
                 .requestMatchers(CorsUtils::isPreFlightRequest).permitAll()
                 .antMatchers(defaultExcludes.toArray(new String[0])).permitAll()
-                .antMatchers(HttpMethod.GET, "/api/proxy/getStreamProxy").permitAll()
+                .antMatchers(HttpMethod.GET, "/api/proxy/getStreamProxy", "/api/proxy/listStreamProxy").permitAll()
                 .anyRequest().authenticated()
                 // 异常处理器
                 .and()

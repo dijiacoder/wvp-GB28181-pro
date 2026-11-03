@@ -80,6 +80,12 @@ public class StreamProxyController {
         return streamProxyService.getAll(page, count, query, pulling, mediaServerId);
     }
 
+    @Operation(summary = "全量查询流代理（免认证）")
+    @GetMapping("/listStreamProxy")
+    public WVPResult<java.util.List<StreamProxySummary>> listStreamProxy() {
+        return WVPResult.success(streamProxyService.listStreamProxy());
+    }
+
     @Operation(summary = "按stream查询流代理（免认证）")
     @GetMapping("/getStreamProxy")
     public WVPResult<StreamProxySummary> getStreamProxy(@RequestParam("stream") String stream) {

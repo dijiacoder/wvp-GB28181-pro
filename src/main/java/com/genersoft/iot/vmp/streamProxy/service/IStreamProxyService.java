@@ -95,6 +95,8 @@ public interface IStreamProxyService {
 
     void delete(int id);
 
+    java.util.List<StreamProxySummary> listStreamProxy();
+
     StreamProxySummary getStreamProxy(String stream);
 
 }
