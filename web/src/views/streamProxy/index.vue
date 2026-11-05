@@ -73,6 +73,7 @@
         </el-table-column>
 
         <el-table-column prop="gbDeviceId" label="国标编码" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="gbName" label="名称" min-width="180" show-overflow-tooltip />
         <el-table-column label="拉流状态" min-width="100">
           <template v-slot:default="scope">
             <div slot="reference" class="name-wrapper">

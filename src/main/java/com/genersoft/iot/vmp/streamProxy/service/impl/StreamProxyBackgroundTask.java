@@ -231,13 +231,18 @@ public class StreamProxyBackgroundTask {
         private StreamProxy createProxy(String url) {
             StreamProxy created = new StreamProxy();
             created.setApp("drone");
+            created.setFfmpegCmdKey("ffmpeg.cmd2");
             created.setStream(sn);
             created.setType("default");
-            created.setTimeout(15);
+            created.setTimeout(5);
             created.setRtspType("0");
             created.setEnable(true);
             created.setServerId(settings.getServerId());
             created.setSrcUrl(url);
+            created.setEnableMp4(true);
+            created.setEnableAudio(false);
+            created.setEnableRemoveNoneReader(false);
+            created.setEnableDisableNoneReader(false);
             return created;
         }
 
