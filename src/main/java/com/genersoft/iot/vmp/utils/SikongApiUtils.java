@@ -248,6 +248,11 @@ public final class SikongApiUtils {
                 return converter;
             }
         }
+        // 列表可能被分页截断时，不能把未找到当作不存在。
+        if (list.size() >= 1000
+                || (data.getLong("total") != null && data.getLongValue("total") > list.size())) {
+            throw new IOException("司空转换器列表不完整，无法确认 SN 是否存在");
+        }
         return null;
     }
 }

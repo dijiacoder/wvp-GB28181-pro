@@ -4,18 +4,34 @@ spring:
   profiles:
     active: 274-dev
 
+# 无人机国标信息同步，修改后重启生效
+drone-gb-sync:
+  enabled: true
+  device-url: http://172.16.5.40:1881/api/uav/openapi/device/getBySn
+  # 接口请求超时，单位毫秒
+  timeout-ms: 10000
+  # 首次执行延迟，单位毫秒
+  initial-delay-ms: 60000
+  # 每轮执行结束后的间隔，单位毫秒
+  interval-ms: 300000
+
+# 清理司空中已不存在的 drone 代理，复用下方 sikong 连接配置
+drone-proxy-cleanup:
+  enabled: true
+  initial-delay-ms: 120000
+  interval-ms: 300000
+
 # MQTT 产品状态订阅，支持通过环境变量覆盖
 mqtt:
-  enabled: ${MQTT_ENABLED:true}
-  url: ${MQTT_URL:tcp://172.16.5.20:1883}
-  username: ${MQTT_USERNAME:admin}
-  password: ${MQTT_PASSWORD:Cykj@12345+}
-  # + 匹配单层产品 ID，例如 thing/product/device001/osd
-  topic: ${MQTT_TOPIC:thing/product/+/osd}
+  enabled: true
+  url: tcp://172.16.5.20:1883
+  username: admin
+  password: Cykj@12345+
+  topic: thing/product/+/osd
 
 # MQTT 上线后使用司空 RTSP 转换器；凭据通过环境变量提供。
 sikong:
-  base-url: ${SIKONG_BASE_URL:}
-  username: ${SIKONG_USERNAME:}
-  password: ${SIKONG_PASSWORD:}
-  organization-key: ${SIKONG_ORGANIZATION_KEY:}
+  base-url: http://172.16.5.56:30812
+  username: admin
+  password: Cykj@2026+
+  organization-key: 73a69adc-8d83-439a-a6b5-b3ad2b0e8a0a
