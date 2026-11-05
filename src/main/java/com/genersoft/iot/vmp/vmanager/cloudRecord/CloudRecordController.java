@@ -39,6 +39,9 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.List;
+import java.util.Map;
+import java.util.LinkedHashMap;
+import com.genersoft.iot.vmp.utils.CloudRecordUtils;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -59,6 +62,49 @@ public class CloudRecordController {
     @Autowired
     private UserSetting userSetting;
 
+
+    @GetMapping("/open/list")
+    @Operation(summary = "免认证查询云端录像（无分页）")
+    public WVPResult<Map<String, Object>> listPublicRecords(
+            @RequestParam String stream,
+            @RequestParam String startTime,
+            @RequestParam String endTime) {
+        if (stream.trim().isEmpty()) {
+            throw new ControllerException(ErrorCode.ERROR100.getCode(), "stream 不能为空");
+        }
+        if (!DateUtil.verification(startTime, DateUtil.formatter)
+                || !DateUtil.verification(endTime, DateUtil.formatter)) {
+            throw new ControllerException(ErrorCode.ERROR100.getCode(), "时间格式应为 yyyy-MM-dd HH:mm:ss");
+        }
+        if (DateUtil.yyyy_MM_dd_HH_mm_ssToTimestampMs(startTime)
+                > DateUtil.yyyy_MM_dd_HH_mm_ssToTimestampMs(endTime)) {
+            throw new ControllerException(ErrorCode.ERROR100.getCode(), "开始时间不能晚于结束时间");
+        }
+        List<CloudRecordItem> records = cloudRecordService.getAllList(
+                null, null, stream, startTime, endTime, null, null, null);
+        List<Map<String, Object>> list = new ArrayList<>(records.size());
+        Map<String, MediaServer> mediaServers = new java.util.HashMap<>();
+        for (CloudRecordItem record : records) {
+            MediaServer mediaServer = mediaServers.computeIfAbsent(record.getMediaServerId(), mediaServerService::getOne);
+            if (mediaServer == null) {
+                throw new ControllerException(ErrorCode.ERROR100.getCode(), "未找到录像所属流媒体节点: " + record.getMediaServerId());
+            }
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("id", record.getId());
+            item.put("app", record.getApp());
+            item.put("stream", record.getStream());
+            item.put("startTime", record.getStartTime());
+            item.put("endTime", record.getEndTime());
+            item.put("fileName", record.getFileName());
+            item.put("playUrl", CloudRecordUtils.getDownloadFilePath(mediaServer, record.getFilePath()).getHttpPath());
+            item.put("fileSize", record.getFileSize());
+            list.add(item);
+        }
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("total", list.size());
+        data.put("list", list);
+        return WVPResult.success(data, "成功");
+    }
 
     @ResponseBody
     @GetMapping("/date/list")
