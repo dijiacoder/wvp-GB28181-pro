@@ -7,6 +7,7 @@ import lombok.Data;
 public class StreamProxySummary {
     private String app;
     private String stream;
+    private String streamName;
     private String rtmpUrl;
     private String flvUrl;
     private int pulling;

@@ -279,6 +279,7 @@ public class StreamProxyServiceImpl implements IStreamProxyService {
         StreamProxySummary result = new StreamProxySummary();
         result.setApp(proxy.getApp());
         result.setStream(proxy.getStream());
+        result.setStreamName(proxy.getGbName());
         result.setPulling(Boolean.TRUE.equals(proxy.getPulling()) ? 1 : 0);
         result.setEnable(proxy.isEnable() ? 1 : 0);
         MediaServer mediaServer = mediaServerService.getOne(proxy.getMediaServerId());
